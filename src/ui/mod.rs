@@ -11,13 +11,13 @@ use ratatui::{
     Frame,
 };
 
-pub fn layout(area: Rect, show_preview: bool, show_help: bool) -> (Rect, Rect, Rect, Option<Rect>) {
+pub fn layout(area: Rect, show_preview: bool, show_help: bool) -> (Rect, Rect, Rect) {
     if show_help {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Percentage(100)])
             .split(area);
-        return (chunks[0], Rect::default(), Rect::default(), None);
+        return (chunks[0], Rect::default(), Rect::default());
     }
 
     if show_preview {
@@ -36,14 +36,14 @@ pub fn layout(area: Rect, show_preview: bool, show_help: bool) -> (Rect, Rect, R
             .constraints([Constraint::Min(0), Constraint::Length(1)])
             .split(chunks[1]);
 
-        (left_chunks[0], right_chunks[0], left_chunks[1], Some(right_chunks[1]))
+        (left_chunks[0], right_chunks[0], left_chunks[1])
     } else {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Min(0), Constraint::Length(1)])
             .split(area);
 
-        (chunks[0], Rect::default(), chunks[1], None)
+        (chunks[0], Rect::default(), chunks[1])
     }
 }
 

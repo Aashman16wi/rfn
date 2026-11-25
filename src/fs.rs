@@ -1,9 +1,9 @@
 use crate::types::{FileEntry, FileType};
 use anyhow::{Context, Result};
-use ignore::WalkDir;
+use walkdir::WalkDir;
 use mime_guess::from_path;
 use std::fs;
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use tokio::task;
@@ -37,33 +37,23 @@ pub async fn read_dir(path: &Path, show_hidden: bool) -> Result<Vec<FileEntry>> 
                 FileType::Symlink
             } else if file_type.is_file() {
                 FileType::File
+            } else if FileTypeExt::is_block_device(&file_type) {
+                FileType::BlockDevice
+            } else if FileTypeExt::is_char_device(&file_type) {
+                FileType::CharDevice
+            } else if FileTypeExt::is_fifo(&file_type) {
+                FileType::Fifo
+            } else if FileTypeExt::is_socket(&file_type) {
+                FileType::Socket
             } else {
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::FileTypeExt;
-                    if file_type.is_block_device() {
-                        FileType::BlockDevice
-                    } else if file_type.is_char_device() {
-                        FileType::CharDevice
-                    } else if file_type.is_fifo() {
-                        FileType::Fifo
-                    } else if file_type.is_socket() {
-                        FileType::Socket
-                    } else {
-                        FileType::Unknown
-                    }
-                }
-                #[cfg(not(unix))]
-                {
-                    FileType::Unknown
-                }
+                FileType::Unknown
             };
 
             let mime_type = from_path(&entry_path).first_raw().map(|s| s.to_string());
 
             entries.push(FileEntry {
                 path: entry_path,
-                name,
+                name: name.clone(),
                 file_type: ft,
                 size,
                 modified,
@@ -87,7 +77,6 @@ pub async fn read_dir_recursive(path: &Path, show_hidden: bool) -> Result<Vec<Fi
         let mut entries = Vec::new();
 
         let walker = WalkDir::new(&path)
-            .hidden(!show_hidden)
             .follow_links(false)
             .into_iter();
 
@@ -115,26 +104,16 @@ pub async fn read_dir_recursive(path: &Path, show_hidden: bool) -> Result<Vec<Fi
                 FileType::Symlink
             } else if file_type.is_file() {
                 FileType::File
+            } else if FileTypeExt::is_block_device(&file_type) {
+                FileType::BlockDevice
+            } else if FileTypeExt::is_char_device(&file_type) {
+                FileType::CharDevice
+            } else if FileTypeExt::is_fifo(&file_type) {
+                FileType::Fifo
+            } else if FileTypeExt::is_socket(&file_type) {
+                FileType::Socket
             } else {
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::FileTypeExt;
-                    if file_type.is_block_device() {
-                        FileType::BlockDevice
-                    } else if file_type.is_char_device() {
-                        FileType::CharDevice
-                    } else if file_type.is_fifo() {
-                        FileType::Fifo
-                    } else if file_type.is_socket() {
-                        FileType::Socket
-                    } else {
-                        FileType::Unknown
-                    }
-                }
-                #[cfg(not(unix))]
-                {
-                    FileType::Unknown
-                }
+                FileType::Unknown
             };
 
             let mime_type = from_path(&entry_path).first_raw().map(|s| s.to_string());

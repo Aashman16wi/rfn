@@ -12,11 +12,9 @@ use ratatui::{
     backend::CrosstermBackend,
     Terminal,
 };
-use std::collections::VecDeque;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use tokio::sync::mpsc;
 use tokio::time::interval;
 
 pub struct App {
@@ -28,7 +26,6 @@ pub struct App {
     list_state: ratatui::widgets::ListState,
 
     preview_content: PreviewContent,
-    preview_task: Option<tokio::task::JoinHandle<()>>,
 
     git_statuses: Vec<(PathBuf, crate::types::GitStatus)>,
     git_root: Option<PathBuf>,
@@ -71,7 +68,6 @@ impl App {
             entries: Vec::new(),
             list_state: ratatui::widgets::ListState::default(),
             preview_content: PreviewContent::none(),
-            preview_task: None,
             git_statuses: Vec::new(),
             git_root: None,
             mode: AppMode::Normal,
@@ -180,19 +176,14 @@ impl App {
 
         if let Some(selected) = self.list_state.selected() {
             if let Some(entry) = self.entries.get(selected) {
-                if let Some(task) = self.preview_task.take() {
-                    task.abort();
-                }
-
                 let entry = entry.clone();
                 let max_size = self.config.preview.max_size;
                 let show_images = self.config.preview.show_images;
 
-                self.preview_task = Some(tokio::spawn(async move {
-                    if let Ok(content) = generate_preview(&entry, max_size, show_images).await {
-                        // Preview will be picked up in next render
-                    }
-                }));
+                match generate_preview(&entry, max_size, show_images).await {
+                    Ok(content) => self.preview_content = content,
+                    Err(_) => self.preview_content = PreviewContent::none(),
+                }
             }
         } else {
             self.preview_content = PreviewContent::none();
@@ -207,14 +198,26 @@ impl App {
             return;
         }
 
-        let (list_area, preview_area, status_area, preview_status_area) =
+        let (list_area, preview_area, status_area) =
             crate::ui::layout(area, self.show_preview, false);
+
+        // Filter entries for search
+        let filtered_entries: Vec<FileEntry> = if self.search_query.is_empty() {
+            self.entries.clone()
+        } else {
+            let query = self.search_query.to_lowercase();
+            self.entries
+                .iter()
+                .filter(|e| e.name.to_lowercase().contains(&query))
+                .cloned()
+                .collect()
+        };
 
         // File list
         crate::ui::file_list::render(
             frame,
             list_area,
-            &self.entries,
+            &filtered_entries,
             &mut self.list_state,
             &self.config.ui.colors,
             self.config.ui.show_icons,
@@ -232,7 +235,16 @@ impl App {
         }
 
         // Status bar
-        let selected_entry = self.list_state.selected().and_then(|i| self.entries.get(i));
+        let filtered_entries: Vec<&FileEntry> = if self.search_query.is_empty() {
+            self.entries.iter().collect()
+        } else {
+            let query = self.search_query.to_lowercase();
+            self.entries
+                .iter()
+                .filter(|e| e.name.to_lowercase().contains(&query))
+                .collect()
+        };
+        let selected_entry = self.list_state.selected().and_then(|i| filtered_entries.get(i).copied());
         crate::ui::status_bar::render(
             frame,
             status_area,
@@ -249,24 +261,7 @@ impl App {
             &self.config.ui.colors,
         );
 
-        // Preview status bar
-        if let Some(preview_status) = preview_status_area {
-            crate::ui::status_bar::render(
-                frame,
-                preview_status,
-                self.mode,
-                &self.current_path,
-                selected_entry,
-                self.clipboard,
-                self.clipboard_paths.len(),
-                self.show_hidden,
-                self.show_preview,
-                self.show_git,
-                self.sort_by,
-                self.reverse_sort,
-                &self.config.ui.colors,
-            );
-        }
+        
     }
 
     async fn handle_event(&mut self, event: Event) -> Result<()> {
@@ -369,7 +364,24 @@ impl App {
     }
 
     fn filter_entries(&mut self) {
-        // TODO: implement search filtering
+        let query = self.search_query.to_lowercase();
+        if query.is_empty() {
+            return;
+        }
+        // Filter is applied in render by checking the search query
+        // We keep all entries but the list rendering will need to filter
+    }
+
+    fn get_filtered_entries(&self) -> Vec<&FileEntry> {
+        if self.search_query.is_empty() {
+            self.entries.iter().collect()
+        } else {
+            let query = self.search_query.to_lowercase();
+            self.entries
+                .iter()
+                .filter(|e| e.name.to_lowercase().contains(&query))
+                .collect()
+        }
     }
 
     async fn handle_rename(&mut self, key: crossterm::event::KeyEvent) -> Result<()> {
