@@ -16,14 +16,15 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use dirs;
 use ratatui::backend::CrosstermBackend;
 use std::io;
 
 #[derive(Parser, Debug)]
 #[command(name = "rfn", version, about = "A minimal async terminal file manager")]
 struct Args {
-    /// Path to start in
-    #[arg(default_value = ".")]
+    /// Path to start in (default: home directory)
+    #[arg(default_value_t = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from(".")).to_string_lossy().into_owned())]
     path: String,
 
     /// Generate default config file to stdout
