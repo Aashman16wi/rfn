@@ -12,6 +12,7 @@ use crate::config::AppConfig;
 use anyhow::Result;
 use clap::Parser;
 use crossterm::{
+    event::{EnableMouseCapture, DisableMouseCapture},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -55,7 +56,7 @@ async fn main() -> Result<()> {
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = ratatui::Terminal::new(backend)?;
 
@@ -64,7 +65,7 @@ async fn main() -> Result<()> {
     let result = app.run(&mut terminal).await;
 
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
     terminal.show_cursor()?;
 
     result

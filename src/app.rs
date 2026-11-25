@@ -269,21 +269,45 @@ impl App {
     }
 
     async fn handle_event(&mut self, event: Event) -> Result<()> {
-        if let Event::Key(key) = event {
-            if key.kind != KeyEventKind::Press {
-                return Ok(());
-            }
+        match event {
+            Event::Key(key) => {
+                if key.kind != KeyEventKind::Press {
+                    return Ok(());
+                }
 
-            match self.mode {
-                AppMode::Normal => self.handle_normal(key).await?,
-                AppMode::Search => self.handle_search(key).await?,
-                AppMode::Rename => self.handle_rename(key).await?,
-                AppMode::NewFile => self.handle_new_file(key).await?,
-                AppMode::NewDir => self.handle_new_dir(key).await?,
-                AppMode::ConfirmDelete => self.handle_confirm_delete(key).await?,
-                AppMode::ConfirmQuit => self.handle_confirm_quit(key).await?,
-                AppMode::Help => self.handle_help(key).await?,
+                match self.mode {
+                    AppMode::Normal => self.handle_normal(key).await?,
+                    AppMode::Search => self.handle_search(key).await?,
+                    AppMode::Rename => self.handle_rename(key).await?,
+                    AppMode::NewFile => self.handle_new_file(key).await?,
+                    AppMode::NewDir => self.handle_new_dir(key).await?,
+                    AppMode::ConfirmDelete => self.handle_confirm_delete(key).await?,
+                    AppMode::ConfirmQuit => self.handle_confirm_quit(key).await?,
+                    AppMode::Help => self.handle_help(key).await?,
+                }
             }
+            Event::Mouse(mouse) => {
+                self.handle_mouse(mouse).await?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    async fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) -> Result<()> {
+        use crossterm::event::{MouseEventKind, MouseButton};
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                // Click to select item
+                // This would need the render area to calculate which item was clicked
+            }
+            MouseEventKind::ScrollUp => {
+                previous(&mut self.list_state, self.entries.len());
+            }
+            MouseEventKind::ScrollDown => {
+                next(&mut self.list_state, self.entries.len());
+            }
+            _ => {}
         }
         Ok(())
     }
