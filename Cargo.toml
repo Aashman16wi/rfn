@@ -15,7 +15,6 @@ crossterm = "0.28"
 tokio = { version = "1.40", features = ["full"] }
 
 # File system
-ignore = "0.4"
 walkdir = "2"
 mime_guess = "2.0"
 
@@ -39,7 +38,6 @@ sixel = { version = "0.3", optional = true }
 # Utils
 anyhow = "1.0"
 thiserror = "1.0"
-crossbeam-channel = "0.5"
 opener = "0.6"
 
 [features]

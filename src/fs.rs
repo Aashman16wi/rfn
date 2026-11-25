@@ -118,6 +118,7 @@ pub async fn read_dir_recursive(path: &Path, show_hidden: bool) -> Result<Vec<Fi
 
             let mime_type = from_path(&entry_path).first_raw().map(|s| s.to_string());
 
+            let is_hidden = name.starts_with('.');
             entries.push(FileEntry {
                 path: entry_path.to_path_buf(),
                 name,
@@ -127,7 +128,7 @@ pub async fn read_dir_recursive(path: &Path, show_hidden: bool) -> Result<Vec<Fi
                 permissions,
                 git_status: Default::default(),
                 mime_type,
-                is_hidden: name.starts_with('.'),
+                is_hidden,
             });
         }
 
