@@ -235,6 +235,17 @@ impl AppConfig {
             .set_default("ui.show_hidden", false)?
             .set_default("ui.show_git_status", true)?
             .set_default("ui.icon_theme", "nerd")?
+            .set_default("ui.colors.dir", "#7aa2f7")?
+            .set_default("ui.colors.file", "#c0caf5")?
+            .set_default("ui.colors.symlink", "#bb9af7")?
+            .set_default("ui.colors.exec", "#9ece6a")?
+            .set_default("ui.colors.git_added", "#9ece6a")?
+            .set_default("ui.colors.git_modified", "#e0af68")?
+            .set_default("ui.colors.git_deleted", "#f7768e")?
+            .set_default("ui.colors.git_untracked", "#ff9e64")?
+            .set_default("ui.colors.git_ignored", "#565f89")?
+            .set_default("ui.colors.selected_bg", "#2e3c64")?
+            .set_default("ui.colors.preview_bg", "#1a1b26")?
             .set_default("behavior.auto_cd", true)?
             .set_default("behavior.confirm_delete", true)?
             .set_default("behavior.confirm_quit", false)?
@@ -246,7 +257,34 @@ impl AppConfig {
             .set_default("preview.show_images", true)?
             .set_default("preview.image_backend", "auto")?
             .set_default("git.enabled", true)?
-            .set_default("git.show_ignored", false)?;
+            .set_default("git.show_ignored", false)?
+            .set_default("keys.quit", vec!["q", "ctrl+c"])?
+            .set_default("keys.up", vec!["k", "up"])?
+            .set_default("keys.down", vec!["j", "down"])?
+            .set_default("keys.left", vec!["h", "left"])?
+            .set_default("keys.right", vec!["l", "right"])?
+            .set_default("keys.enter", vec!["enter", "l"])?
+            .set_default("keys.backspace", vec!["backspace", "h"])?
+            .set_default("keys.delete", vec!["d", "delete"])?
+            .set_default("keys.rename", vec!["r"])?
+            .set_default("keys.new_file", vec!["n"])?
+            .set_default("keys.new_dir", vec!["shift+n"])?
+            .set_default("keys.copy", vec!["y"])?
+            .set_default("keys.paste", vec!["p"])?
+            .set_default("keys.cut", vec!["x"])?
+            .set_default("keys.search", vec!["/"])?
+            .set_default("keys.toggle_hidden", vec!["."])?
+            .set_default("keys.toggle_preview", vec!["P"])?
+            .set_default("keys.toggle_git", vec!["g"])?
+            .set_default("keys.help", vec!["?"])?
+            .set_default("keys.refresh", vec!["R", "ctrl+r"])?
+            .set_default("keys.goto_parent", vec!["H", "ctrl+h"])?
+            .set_default("keys.goto_home", vec!["~"])?
+            .set_default("keys.sort_name", vec!["sn"])?
+            .set_default("keys.sort_size", vec!["ss"])?
+            .set_default("keys.sort_time", vec!["st"])?
+            .set_default("keys.sort_ext", vec!["se"])?
+            .set_default("keys.reverse_sort", vec!["sr"])?;
 
         if let Some(config_dir) = config_dir() {
             let config_path = config_dir.join("rfn").join("config.toml");
