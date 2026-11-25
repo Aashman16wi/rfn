@@ -3,7 +3,9 @@ use crate::fs::{apply_git_status, find_git_root, get_git_status, read_dir, sort_
 use crate::keys::{Action, KeyMapper};
 use crate::preview::generate_preview;
 use crate::types::{AppMode, ClipboardOp, FileEntry, PreviewContent, PreviewType};
-use crate::ui::file_list::{next, previous};
+use crate::ui::file_list::{
+    go_to_bottom, go_to_top, next, page_down, page_up, previous,
+};
 use crate::ui::help::render as render_help;
 use anyhow::Result;
 use crossterm::event::{Event, KeyEventKind};
@@ -64,7 +66,9 @@ pub struct App {
     current_path: PathBuf,
     entries: Vec<FileEntry>,
     display: Vec<FileEntry>,
+    parent_entries: Vec<FileEntry>,
     list_state: ratatui::widgets::ListState,
+    list_inner: ratatui::layout::Rect,
 
     preview_content: PreviewContent,
     preview_protocol: Option<StatefulProtocol>,
@@ -118,7 +122,9 @@ impl App {
             current_path,
             entries: Vec::new(),
             display: Vec::new(),
+            parent_entries: Vec::new(),
             list_state: ratatui::widgets::ListState::default(),
+            list_inner: ratatui::layout::Rect::default(),
             preview_content: PreviewContent::none(),
             preview_protocol: None,
             git_statuses: Vec::new(),
@@ -195,6 +201,20 @@ impl App {
     async fn refresh(&mut self) -> Result<()> {
         self.entries = read_dir(&self.current_path, self.show_hidden).await?;
         sort_entries(&mut self.entries, self.sort_by, self.config.behavior.sort_dirs_first, self.reverse_sort);
+
+        self.parent_entries = match self.current_path.parent() {
+            Some(parent) => {
+                let mut entries = read_dir(parent, self.show_hidden).await.unwrap_or_default();
+                sort_entries(
+                    &mut entries,
+                    self.sort_by,
+                    self.config.behavior.sort_dirs_first,
+                    self.reverse_sort,
+                );
+                entries
+            }
+            None => Vec::new(),
+        };
 
         self.refresh_git().await?;
         self.rebuild_display();
@@ -302,45 +322,86 @@ impl App {
     }
 
     fn render(&mut self, frame: &mut ratatui::Frame) {
-        let area = frame.size();
+        let area = frame.area();
+        let colors = &self.config.ui.colors;
+
+        frame.render_widget(
+            ratatui::widgets::Block::default()
+                .style(ratatui::style::Style::default().bg(crate::ui::parse_color(&colors.bg))),
+            area,
+        );
 
         if self.help_visible {
-            render_help(frame, area, &self.config.keys);
+            render_help(frame, area, &self.config.keys, colors);
             return;
         }
 
-        let (list_area, preview_area, status_area) =
-            crate::ui::layout(area, self.show_preview, false);
+        let areas = crate::ui::layout(area, self.show_preview, self.config.ui.show_parent);
+
+        let current_title = dir_title(&self.current_path);
+
+        // Breadcrumb bar
+        crate::ui::top_bar::render(
+            frame,
+            areas.top,
+            &self.current_path,
+            self.display.len(),
+            colors,
+        );
+
+        // Parent column (Miller style)
+        if let Some(parent_area) = areas.parent {
+            let current_name = self
+                .current_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("");
+            let parent_title = self
+                .current_path
+                .parent()
+                .map(dir_title)
+                .unwrap_or_else(|| "/".to_string());
+            crate::ui::file_list::render_parent(
+                frame,
+                parent_area,
+                &self.parent_entries,
+                current_name,
+                colors,
+                self.config.ui.show_icons,
+                &parent_title,
+            );
+        }
 
         // File list
-        crate::ui::file_list::render(
+        self.list_inner = crate::ui::file_list::render(
             frame,
-            list_area,
+            areas.current,
             &self.display,
             &mut self.list_state,
-            &self.config.ui.colors,
+            colors,
             self.config.ui.show_icons,
             self.show_git,
+            &current_title,
         );
 
         // Preview
-        if self.show_preview {
+        if let Some(preview_area) = areas.preview {
             crate::ui::preview::render(
                 frame,
                 preview_area,
                 &self.preview_content,
                 self.preview_protocol.as_mut(),
-                &self.config.ui.colors,
+                colors,
             );
         }
 
         // Status bar
+        let status_area = areas.status;
         let selected_entry = self.selected_entry();
         crate::ui::status_bar::render(
             frame,
             status_area,
             self.mode,
-            &self.current_path,
             selected_entry,
             self.clipboard,
             self.clipboard_paths.len(),
@@ -349,7 +410,8 @@ impl App {
             self.show_git,
             self.sort_by,
             self.reverse_sort,
-            &self.config.ui.colors,
+            &self.search_query,
+            colors,
         );
 
         // Typing prompt replaces the status bar; confirmations float on top.
@@ -399,6 +461,11 @@ impl App {
                     return Ok(());
                 }
 
+                if self.help_visible {
+                    self.handle_help(key).await?;
+                    return Ok(());
+                }
+
                 match self.mode {
                     AppMode::Normal => self.handle_normal(key).await?,
                     AppMode::Search => self.handle_search(key).await?,
@@ -422,8 +489,19 @@ impl App {
         use crossterm::event::{MouseEventKind, MouseButton};
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
-                // Click to select item
-                // This would need the render area to calculate which item was clicked
+                let inner = self.list_inner;
+                let inside = mouse.row >= inner.y
+                    && mouse.row < inner.y + inner.height
+                    && mouse.column >= inner.x
+                    && mouse.column < inner.x + inner.width;
+
+                if inside {
+                    let index = self.list_state.offset() + (mouse.row - inner.y) as usize;
+                    if index < self.display.len() {
+                        self.list_state.select(Some(index));
+                        self.update_preview().await;
+                    }
+                }
             }
             MouseEventKind::ScrollUp => {
                 previous(&mut self.list_state, self.display.len());
@@ -439,11 +517,54 @@ impl App {
     }
 
     async fn handle_normal(&mut self, key: crossterm::event::KeyEvent) -> Result<()> {
-        if key.code == crossterm::event::KeyCode::Esc && !self.search_query.is_empty() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        if key.code == KeyCode::Esc && !self.search_query.is_empty() {
             self.search_query.clear();
             self.rebuild_display();
             self.update_preview().await;
             return Ok(());
+        }
+
+        // Vim-style jump keys that do not need a config entry.
+        let page = page_size();
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            match key.code {
+                KeyCode::Char('d') => {
+                    page_down(&mut self.list_state, self.display.len(), page);
+                    self.update_preview().await;
+                    return Ok(());
+                }
+                KeyCode::Char('u') => {
+                    page_up(&mut self.list_state, page);
+                    self.update_preview().await;
+                    return Ok(());
+                }
+                _ => {}
+            }
+        }
+        match key.code {
+            KeyCode::PageDown => {
+                page_down(&mut self.list_state, self.display.len(), page);
+                self.update_preview().await;
+                return Ok(());
+            }
+            KeyCode::PageUp => {
+                page_up(&mut self.list_state, page);
+                self.update_preview().await;
+                return Ok(());
+            }
+            KeyCode::Home => {
+                go_to_top(&mut self.list_state);
+                self.update_preview().await;
+                return Ok(());
+            }
+            KeyCode::End | KeyCode::Char('G') => {
+                go_to_bottom(&mut self.list_state, self.display.len());
+                self.update_preview().await;
+                return Ok(());
+            }
+            _ => {}
         }
 
         if let Some(action) = self.key_mapper.get_action(key) {
@@ -499,15 +620,23 @@ impl App {
                         self.rebuild_display();
                     }
                 }
-                Action::Help => self.help_visible = true,
+                Action::Help => self.help_visible = !self.help_visible,
                 Action::Refresh => self.refresh().await?,
                 Action::GotoParent => self.go_parent().await?,
                 Action::GotoHome => self.go_home().await?,
-                Action::SortName => { self.sort_by = SortBy::Name; self.refresh().await?; }
-                Action::SortSize => { self.sort_by = SortBy::Size; self.refresh().await?; }
-                Action::SortTime => { self.sort_by = SortBy::Modified; self.refresh().await?; }
-                Action::SortExt => { self.sort_by = SortBy::Extension; self.refresh().await?; }
-                Action::ReverseSort => { self.reverse_sort = !self.reverse_sort; self.refresh().await?; }
+                Action::SortCycle => {
+                    self.sort_by = match self.sort_by {
+                        SortBy::Name => SortBy::Size,
+                        SortBy::Size => SortBy::Modified,
+                        SortBy::Modified => SortBy::Extension,
+                        SortBy::Extension => SortBy::Name,
+                    };
+                    self.refresh().await?;
+                }
+                Action::ReverseSort => {
+                    self.reverse_sort = !self.reverse_sort;
+                    self.refresh().await?;
+                }
             }
         }
         Ok(())
@@ -649,6 +778,9 @@ impl App {
             crossterm::event::KeyCode::Char('?') | crossterm::event::KeyCode::Esc => {
                 self.help_visible = false;
             }
+            crossterm::event::KeyCode::Char('q') => {
+                self.should_quit = true;
+            }
             _ => {}
         }
         Ok(())
@@ -772,6 +904,28 @@ impl App {
         }
         Ok(())
     }
+}
+
+fn page_size() -> usize {
+    crossterm::terminal::size()
+        .map(|(_, height)| height.saturating_sub(5) as usize)
+        .unwrap_or(15)
+        .max(1)
+}
+
+fn dir_title(path: &Path) -> String {
+    if let Some(home) = dirs::home_dir() {
+        if path == home {
+            return "~".to_string();
+        }
+    }
+    if path.parent().is_none() {
+        return "/".to_string();
+    }
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name.to_string())
+        .unwrap_or_else(|| path.display().to_string())
 }
 
 async fn copy_dir(src: &Path, dst: &Path) -> Result<()> {

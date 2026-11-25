@@ -3,9 +3,9 @@ use crate::types::{PreviewContent, PreviewType};
 use crate::ui::parse_color;
 use ratatui::{
     layout::Rect,
-    style::{Color, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, BorderType, Borders, Paragraph, Wrap},
     Frame,
 };
 use ratatui_image::{protocol::StatefulProtocol, Resize, StatefulImage};
@@ -18,10 +18,16 @@ pub fn render(
     colors: &ColorConfig,
 ) {
     let block = Block::default()
-        .title(" Preview ")
+        .title(Line::from(Span::styled(
+            " Preview ",
+            Style::default()
+                .fg(parse_color(&colors.fg))
+                .add_modifier(Modifier::BOLD),
+        )))
         .borders(Borders::ALL)
-        .border_type(ratatui::widgets::BorderType::Rounded)
-        .style(Style::default().bg(parse_color(&colors.preview_bg)));
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(parse_color(&colors.border)))
+        .style(Style::default().bg(parse_color(&colors.bg)));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -37,33 +43,39 @@ pub fn render(
         }
     }
 
+    let muted = parse_color(&colors.muted);
     let text = match content.preview_type {
         PreviewType::Image => vec![Line::from(Span::styled(
             "[Image preview unavailable]",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(muted),
         ))],
         PreviewType::Binary => vec![Line::from(Span::styled(
             "[Binary file]",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(muted),
         ))],
         PreviewType::Directory => vec![Line::from(Span::styled(
             "[Directory]",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(muted),
         ))],
         PreviewType::None => vec![Line::from(Span::styled(
             "[No preview]",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(muted),
         ))],
         PreviewType::Text => content
             .content
             .lines()
-            .map(|line| Line::from(Span::raw(line.to_string())))
+            .map(|line| {
+                Line::from(Span::styled(
+                    line.to_string(),
+                    Style::default().fg(parse_color(&colors.fg)),
+                ))
+            })
             .collect(),
     };
 
     let paragraph = Paragraph::new(text)
         .wrap(Wrap { trim: false })
-        .style(Style::default().bg(parse_color(&colors.preview_bg)));
+        .style(Style::default().bg(parse_color(&colors.bg)));
 
     frame.render_widget(paragraph, inner);
 }

@@ -25,12 +25,22 @@ pub struct UiConfig {
     pub show_icons: bool,
     pub show_hidden: bool,
     pub show_git_status: bool,
+    pub show_parent: bool,
     pub icon_theme: String,
     pub colors: ColorConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ColorConfig {
+    pub bg: String,
+    pub fg: String,
+    pub muted: String,
+    pub accent: String,
+    pub border: String,
+    pub topbar_bg: String,
+    pub status_bg: String,
+    pub selected_bg: String,
+    pub selected_fg: String,
     pub dir: String,
     pub file: String,
     pub symlink: String,
@@ -40,7 +50,6 @@ pub struct ColorConfig {
     pub git_deleted: String,
     pub git_untracked: String,
     pub git_ignored: String,
-    pub selected_bg: String,
     pub preview_bg: String,
 }
 
@@ -112,10 +121,7 @@ pub struct KeyConfig {
     pub refresh: Vec<String>,
     pub goto_parent: Vec<String>,
     pub goto_home: Vec<String>,
-    pub sort_name: Vec<String>,
-    pub sort_size: Vec<String>,
-    pub sort_time: Vec<String>,
-    pub sort_ext: Vec<String>,
+    pub sort: Vec<String>,
     pub reverse_sort: Vec<String>,
 }
 
@@ -137,6 +143,7 @@ impl Default for UiConfig {
             show_icons: true,
             show_hidden: false,
             show_git_status: true,
+            show_parent: true,
             icon_theme: "nerd".to_string(),
             colors: ColorConfig::default(),
         }
@@ -146,6 +153,15 @@ impl Default for UiConfig {
 impl Default for ColorConfig {
     fn default() -> Self {
         Self {
+            bg: "#1a1b26".to_string(),
+            fg: "#c0caf5".to_string(),
+            muted: "#565f89".to_string(),
+            accent: "#7aa2f7".to_string(),
+            border: "#2f3549".to_string(),
+            topbar_bg: "#16161e".to_string(),
+            status_bg: "#16161e".to_string(),
+            selected_bg: "#283457".to_string(),
+            selected_fg: "#c0caf5".to_string(),
             dir: "#7aa2f7".to_string(),
             file: "#c0caf5".to_string(),
             symlink: "#bb9af7".to_string(),
@@ -155,7 +171,6 @@ impl Default for ColorConfig {
             git_deleted: "#f7768e".to_string(),
             git_untracked: "#ff9e64".to_string(),
             git_ignored: "#565f89".to_string(),
-            selected_bg: "#2e3c64".to_string(),
             preview_bg: "#1a1b26".to_string(),
         }
     }
@@ -219,11 +234,8 @@ impl Default for KeyConfig {
             refresh: vec!["R".into(), "ctrl+r".into()],
             goto_parent: vec!["H".into(), "ctrl+h".into()],
             goto_home: vec!["~".into()],
-            sort_name: vec!["sn".into()],
-            sort_size: vec!["ss".into()],
-            sort_time: vec!["st".into()],
-            sort_ext: vec!["se".into()],
-            reverse_sort: vec!["sr".into()],
+            sort: vec!["s".into()],
+            reverse_sort: vec!["S".into()],
         }
     }
 }
@@ -234,7 +246,17 @@ impl AppConfig {
             .set_default("ui.show_icons", true)?
             .set_default("ui.show_hidden", false)?
             .set_default("ui.show_git_status", true)?
+            .set_default("ui.show_parent", true)?
             .set_default("ui.icon_theme", "nerd")?
+            .set_default("ui.colors.bg", "#1a1b26")?
+            .set_default("ui.colors.fg", "#c0caf5")?
+            .set_default("ui.colors.muted", "#565f89")?
+            .set_default("ui.colors.accent", "#7aa2f7")?
+            .set_default("ui.colors.border", "#2f3549")?
+            .set_default("ui.colors.topbar_bg", "#16161e")?
+            .set_default("ui.colors.status_bg", "#16161e")?
+            .set_default("ui.colors.selected_bg", "#283457")?
+            .set_default("ui.colors.selected_fg", "#c0caf5")?
             .set_default("ui.colors.dir", "#7aa2f7")?
             .set_default("ui.colors.file", "#c0caf5")?
             .set_default("ui.colors.symlink", "#bb9af7")?
@@ -244,7 +266,6 @@ impl AppConfig {
             .set_default("ui.colors.git_deleted", "#f7768e")?
             .set_default("ui.colors.git_untracked", "#ff9e64")?
             .set_default("ui.colors.git_ignored", "#565f89")?
-            .set_default("ui.colors.selected_bg", "#2e3c64")?
             .set_default("ui.colors.preview_bg", "#1a1b26")?
             .set_default("behavior.auto_cd", true)?
             .set_default("behavior.confirm_delete", true)?
@@ -280,11 +301,8 @@ impl AppConfig {
             .set_default("keys.refresh", vec!["R", "ctrl+r"])?
             .set_default("keys.goto_parent", vec!["H", "ctrl+h"])?
             .set_default("keys.goto_home", vec!["~"])?
-            .set_default("keys.sort_name", vec!["sn"])?
-            .set_default("keys.sort_size", vec!["ss"])?
-            .set_default("keys.sort_time", vec!["st"])?
-            .set_default("keys.sort_ext", vec!["se"])?
-            .set_default("keys.reverse_sort", vec!["sr"])?;
+            .set_default("keys.sort", vec!["s"])?
+            .set_default("keys.reverse_sort", vec!["S"])?;
 
         if let Some(config_dir) = config_dir() {
             let config_path = config_dir.join("rfn").join("config.toml");

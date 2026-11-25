@@ -1,0 +1,115 @@
+use crate::config::ColorConfig;
+use crate::ui::parse_color;
+use ratatui::{
+    layout::{Alignment, Rect},
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Paragraph},
+    Frame,
+};
+use std::path::Path;
+use unicode_width::UnicodeWidthStr;
+
+pub fn render(
+    frame: &mut Frame,
+    area: Rect,
+    current_path: &Path,
+    item_count: usize,
+    colors: &ColorConfig,
+) {
+    let bg = parse_color(&colors.topbar_bg);
+    let muted = parse_color(&colors.muted);
+    let fg = parse_color(&colors.fg);
+    let accent = parse_color(&colors.accent);
+
+    frame.render_widget(Block::default().style(Style::default().bg(bg)), area);
+
+    let right = format!(" {item_count} items ");
+    let right_width = right.width();
+
+    let mut spans = vec![
+        Span::styled(
+            " rfn ",
+            Style::default()
+                .bg(accent)
+                .fg(parse_color(&colors.bg))
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+    ];
+
+    let path_text = display_path(current_path);
+    let mut segments: Vec<String> = path_text
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .map(|segment| segment.to_string())
+        .collect();
+
+    if path_text.starts_with('/') {
+        segments.insert(0, "/".to_string());
+    }
+
+    if segments.len() > 4 {
+        let keep = segments.split_off(segments.len() - 3);
+        segments = vec!["…".to_string()];
+        segments.extend(keep);
+    }
+
+    let available = area.width.saturating_sub(right_width as u16 + 2) as usize;
+    let mut used = 6; // " rfn " + space
+
+    for (index, segment) in segments.iter().enumerate() {
+        let is_last = index == segments.len() - 1;
+        let piece = if index == 0 {
+            segment.clone()
+        } else {
+            format!("› {segment}")
+        };
+
+        let piece_width = piece.width();
+        if used + piece_width > available {
+            break;
+        }
+        used += piece_width;
+
+        if index > 0 {
+            spans.push(Span::styled(" ", Style::default().fg(muted)));
+        }
+
+        spans.push(Span::styled(
+            segment.clone(),
+            if is_last {
+                Style::default().fg(accent).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(fg)
+            },
+        ));
+
+        if !is_last {
+            spans.push(Span::styled(" › ", Style::default().fg(muted)));
+        }
+    }
+
+    frame.render_widget(
+        Paragraph::new(Line::from(spans)).style(Style::default().bg(bg)),
+        area,
+    );
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(right, Style::default().fg(muted))))
+            .alignment(Alignment::Right)
+            .style(Style::default().bg(bg)),
+        area,
+    );
+}
+
+fn display_path(path: &Path) -> String {
+    if let Some(home) = dirs::home_dir() {
+        if path == home {
+            return "~".to_string();
+        }
+        if let Ok(stripped) = path.strip_prefix(&home) {
+            return format!("~/{}", stripped.display());
+        }
+    }
+    path.display().to_string()
+}

@@ -1,48 +1,82 @@
 pub mod file_list;
-pub mod preview;
-pub mod status_bar;
+pub mod format;
 pub mod help;
+pub mod preview;
 pub mod prompt;
+pub mod status_bar;
+pub mod top_bar;
 
-use crate::config::ColorConfig;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Style},
+    style::Color,
 };
 
-pub fn layout(area: Rect, show_preview: bool, show_help: bool) -> (Rect, Rect, Rect) {
-    if show_help {
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Percentage(100)])
-            .split(area);
-        return (chunks[0], Rect::default(), Rect::default());
+pub struct LayoutAreas {
+    pub top: Rect,
+    pub parent: Option<Rect>,
+    pub current: Rect,
+    pub preview: Option<Rect>,
+    pub status: Rect,
+}
+
+pub fn layout(area: Rect, show_preview: bool, show_parent: bool) -> LayoutAreas {
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(0),
+            Constraint::Length(1),
+        ])
+        .split(area);
+
+    let body = rows[1];
+    let show_parent = show_parent && body.width >= 100;
+    let show_preview = show_preview && body.width >= 70;
+    let gap = 1;
+
+    let mut parent = None;
+    let mut preview = None;
+    let current;
+
+    if show_parent && show_preview {
+        let usable = body.width.saturating_sub(gap * 2) as u32;
+        let parent_width = (usable * 22 / 100) as u16;
+        let current_width = (usable * 38 / 100) as u16;
+        let preview_width = usable as u16 - parent_width - current_width;
+
+        parent = Some(Rect::new(body.x, body.y, parent_width, body.height));
+        current = Rect::new(
+            body.x + parent_width + gap,
+            body.y,
+            current_width,
+            body.height,
+        );
+        preview = Some(Rect::new(
+            body.x + parent_width + gap + current_width + gap,
+            body.y,
+            preview_width,
+            body.height,
+        ));
+    } else if show_preview {
+        let usable = body.width.saturating_sub(gap);
+        let current_width = usable * 55 / 100;
+        current = Rect::new(body.x, body.y, current_width, body.height);
+        preview = Some(Rect::new(
+            body.x + current_width + gap,
+            body.y,
+            usable - current_width,
+            body.height,
+        ));
+    } else {
+        current = body;
     }
 
-    if show_preview {
-        let chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
-            .split(area);
-
-        let left_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(0), Constraint::Length(1)])
-            .split(chunks[0]);
-
-        let right_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(0), Constraint::Length(1)])
-            .split(chunks[1]);
-
-        (left_chunks[0], right_chunks[0], left_chunks[1])
-    } else {
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(0), Constraint::Length(1)])
-            .split(area);
-
-        (chunks[0], Rect::default(), chunks[1])
+    LayoutAreas {
+        top: rows[0],
+        parent,
+        current,
+        preview,
+        status: rows[2],
     }
 }
 
@@ -55,23 +89,4 @@ pub fn parse_color(s: &str) -> Color {
     } else {
         Color::White
     }
-}
-
-pub fn file_style(colors: &ColorConfig, git_status: &crate::types::GitStatus, selected: bool) -> Style {
-    let mut style = Style::default();
-
-    if selected {
-        style = style.bg(parse_color(&colors.selected_bg));
-    }
-
-    let (r, g, b) = crate::icons::git_status_color(git_status);
-    let git_color = Color::Rgb(r, g, b);
-
-    if *git_status != crate::types::GitStatus::Unmodified {
-        style = style.fg(git_color);
-    } else {
-        // Default file colors would go here based on file type
-    }
-
-    style
 }

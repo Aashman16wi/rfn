@@ -1,4 +1,7 @@
-use crate::types::FileType;
+use crate::config::ColorConfig;
+use crate::types::{FileEntry, FileType};
+use crate::ui::parse_color;
+use ratatui::style::Color;
 use std::path::Path;
 
 pub fn get_icon(path: &Path, file_type: FileType, show_icons: bool) -> &'static str {
@@ -63,7 +66,6 @@ pub fn get_icon(path: &Path, file_type: FileType, show_icons: bool) -> &'static 
         // C/C++
         "c" | "h" => "",
         "cpp" | "cc" | "cxx" | "hpp" | "hh" => "󰙲",
-        "rs" => "",
 
         // Java/Kotlin
         "java" => "󰬷",
@@ -91,7 +93,6 @@ pub fn get_icon(path: &Path, file_type: FileType, show_icons: bool) -> &'static 
 
         // Images
         "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" | "ico" => "󰈟",
-        "svg" => "󰜡",
 
         // Video
         "mp4" | "mkv" | "webm" | "mov" => "󰈫",
@@ -124,6 +125,71 @@ pub fn get_icon(path: &Path, file_type: FileType, show_icons: bool) -> &'static 
             FileType::File => "󰈙",
             _ => "󰈙",
         },
+    }
+}
+
+/// Icon tint, roughly yazi-ish: color carries the file kind at a glance.
+pub fn icon_color(entry: &FileEntry, colors: &ColorConfig) -> Color {
+    if entry.is_dir() {
+        return parse_color(&colors.dir);
+    }
+    if entry.is_symlink() {
+        return parse_color(&colors.symlink);
+    }
+    if entry.permissions & 0o111 != 0 {
+        return parse_color(&colors.exec);
+    }
+
+    let ext = entry
+        .path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+
+    match ext.as_str() {
+        // Rust
+        "rs" => Color::Rgb(255, 158, 100),
+        "toml" | "lock" => Color::Rgb(187, 154, 247),
+
+        // JS/TS/web
+        "js" | "jsx" | "mjs" | "cjs" => Color::Rgb(224, 175, 104),
+        "ts" | "tsx" | "mts" | "cts" => Color::Rgb(125, 207, 255),
+        "json" | "jsonc" => Color::Rgb(224, 175, 104),
+        "html" | "htm" | "css" | "scss" | "sass" | "less" => Color::Rgb(247, 118, 142),
+        "svg" => Color::Rgb(255, 158, 100),
+
+        // Python/go/other languages
+        "py" | "pyw" | "ipynb" => Color::Rgb(125, 207, 255),
+        "go" | "mod" | "sum" => Color::Rgb(115, 218, 202),
+        "c" | "h" | "cpp" | "cc" | "cxx" | "hpp" | "hh" => Color::Rgb(122, 162, 247),
+        "java" | "kt" | "kts" | "scala" => Color::Rgb(247, 118, 142),
+        "rb" | "php" | "lua" | "zig" | "nim" | "dart" | "swift" => Color::Rgb(187, 154, 247),
+
+        // Shell
+        "sh" | "bash" | "zsh" | "fish" | "ps1" => Color::Rgb(158, 206, 106),
+
+        // Docs
+        "md" | "markdown" | "txt" | "log" => Color::Rgb(122, 162, 247),
+        "pdf" => Color::Rgb(247, 118, 142),
+
+        // Media
+        "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" | "ico" | "avif" | "tiff" => {
+            Color::Rgb(187, 154, 247)
+        }
+        "mp4" | "mkv" | "webm" | "mov" | "avi" => Color::Rgb(247, 118, 142),
+        "mp3" | "flac" | "wav" | "ogg" | "m4a" => Color::Rgb(158, 206, 106),
+
+        // Archives
+        "zip" | "tar" | "gz" | "bz2" | "xz" | "zst" | "7z" | "rar" => Color::Rgb(224, 175, 104),
+
+        // Config
+        "yaml" | "yml" | "ini" | "cfg" | "conf" | "env" => Color::Rgb(115, 218, 202),
+
+        // Fonts
+        "ttf" | "otf" | "woff" | "woff2" => Color::Rgb(224, 175, 104),
+
+        _ => parse_color(&colors.muted),
     }
 }
 

@@ -26,10 +26,7 @@ pub enum Action {
     Refresh,
     GotoParent,
     GotoHome,
-    SortName,
-    SortSize,
-    SortTime,
-    SortExt,
+    SortCycle,
     ReverseSort,
 }
 
@@ -63,10 +60,7 @@ impl KeyMapper {
         Self::add_keys(&mut map, &config.refresh, Action::Refresh);
         Self::add_keys(&mut map, &config.goto_parent, Action::GotoParent);
         Self::add_keys(&mut map, &config.goto_home, Action::GotoHome);
-        Self::add_keys(&mut map, &config.sort_name, Action::SortName);
-        Self::add_keys(&mut map, &config.sort_size, Action::SortSize);
-        Self::add_keys(&mut map, &config.sort_time, Action::SortTime);
-        Self::add_keys(&mut map, &config.sort_ext, Action::SortExt);
+        Self::add_keys(&mut map, &config.sort, Action::SortCycle);
         Self::add_keys(&mut map, &config.reverse_sort, Action::ReverseSort);
 
         Self { map }

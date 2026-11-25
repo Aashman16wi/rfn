@@ -1,138 +1,178 @@
+use crate::config::{ColorConfig, SortBy};
 use crate::types::{AppMode, ClipboardOp, FileEntry, GitStatus};
-use crate::config::ColorConfig;
+use crate::ui::format::{format_age, format_permissions, format_size};
 use crate::ui::parse_color;
 use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Paragraph},
     Frame,
 };
+use unicode_width::UnicodeWidthStr;
 
 pub fn render(
     frame: &mut Frame,
     area: Rect,
     mode: AppMode,
-    current_path: &std::path::Path,
     selected_entry: Option<&FileEntry>,
     clipboard: ClipboardOp,
     clipboard_count: usize,
     show_hidden: bool,
     show_preview: bool,
     show_git: bool,
-    sort_by: crate::config::SortBy,
+    sort_by: SortBy,
     reverse_sort: bool,
+    search_query: &str,
     colors: &ColorConfig,
 ) {
-    let mut spans = Vec::new();
+    let bg = parse_color(&colors.status_bg);
+    let fg = parse_color(&colors.fg);
+    let muted = parse_color(&colors.muted);
+    let accent = parse_color(&colors.accent);
 
-    // Mode indicator
-    let mode_str = match mode {
-        AppMode::Normal => "NORMAL",
-        AppMode::Search => "SEARCH",
-        AppMode::Rename => "RENAME",
-        AppMode::NewFile => "NEW FILE",
-        AppMode::NewDir => "NEW DIR",
-        AppMode::ConfirmDelete => "CONFIRM DEL",
-        AppMode::ConfirmQuit => "CONFIRM QUIT",
-        AppMode::Help => "HELP",
-    };
-    spans.push(Span::styled(
-        format!(" {} ", mode_str),
-        Style::default()
-            .bg(parse_color(&colors.selected_bg))
-            .fg(Color::White)
-            .add_modifier(Modifier::BOLD),
-    ));
+    frame.render_widget(Block::default().style(Style::default().bg(bg)), area);
 
-    spans.push(Span::raw(" "));
+    let (mode_label, mode_color) = mode_style(mode, accent);
+    let mut left = vec![
+        Span::styled(
+            format!(" {mode_label} "),
+            Style::default()
+                .bg(mode_color)
+                .fg(parse_color(&colors.bg))
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+    ];
 
-    // Path
-    spans.push(Span::styled(
-        format!("{}", current_path.display()),
-        Style::default().fg(Color::Cyan),
-    ));
+    if !search_query.is_empty() {
+        left.push(Span::styled(
+            format!(" /{search_query} "),
+            Style::default()
+                .bg(parse_color(&colors.border))
+                .fg(accent)
+                .add_modifier(Modifier::BOLD),
+        ));
+        left.push(Span::raw(" "));
+    }
 
-    spans.push(Span::raw(" "));
-
-    // Selected file info
     if let Some(entry) = selected_entry {
-        let size_str = format_size(entry.size);
-        spans.push(Span::styled(
-            format!("{} ", size_str),
-            Style::default().fg(Color::Yellow),
+        let icon = crate::icons::get_icon(&entry.path, entry.file_type.clone(), true);
+        left.push(Span::styled(
+            format!("{icon} "),
+            Style::default().fg(crate::icons::icon_color(entry, colors)),
+        ));
+        left.push(Span::styled(
+            entry.name.clone(),
+            Style::default().fg(fg).add_modifier(Modifier::BOLD),
+        ));
+        left.push(Span::raw("  "));
+        left.push(Span::styled(format_size(entry.size), Style::default().fg(muted)));
+        left.push(Span::raw("  "));
+        left.push(Span::styled(
+            format_age(entry.modified),
+            Style::default().fg(muted),
+        ));
+        left.push(Span::raw("  "));
+        left.push(Span::styled(
+            format_permissions(entry.permissions),
+            Style::default().fg(muted),
         ));
 
         if entry.git_status != GitStatus::Unmodified {
+            left.push(Span::raw("  "));
             let (r, g, b) = crate::icons::git_status_color(&entry.git_status);
-            spans.push(Span::styled(
-                format!("[{}] ", git_status_str(&entry.git_status)),
-                Style::default().fg(Color::Rgb(r, g, b)),
+            left.push(Span::styled(
+                format!(" {} ", git_status_str(&entry.git_status)),
+                Style::default().bg(Color::Rgb(r, g, b)).fg(Color::Black),
             ));
         }
     }
 
-    spans.push(Span::raw(" "));
-
-    // Clipboard
     if clipboard != ClipboardOp::None && clipboard_count > 0 {
-        let op = match clipboard {
+        let label = match clipboard {
             ClipboardOp::Copy => "COPY",
             ClipboardOp::Cut => "CUT",
-            _ => "",
+            ClipboardOp::None => "",
         };
-        spans.push(Span::styled(
-            format!("{} {} ", op, clipboard_count),
-            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+        left.push(Span::raw(" "));
+        left.push(Span::styled(
+            format!(" {label} {clipboard_count} "),
+            Style::default()
+                .bg(parse_color(&colors.git_added))
+                .fg(parse_color(&colors.bg))
+                .add_modifier(Modifier::BOLD),
         ));
     }
 
-    // Flags
     let mut flags = Vec::new();
     if show_hidden {
-        flags.push("H");
+        flags.push("hidden");
     }
     if show_preview {
-        flags.push("P");
+        flags.push("preview");
     }
     if show_git {
-        flags.push("G");
+        flags.push("git");
     }
-    if reverse_sort {
-        flags.push("R");
-    }
-    let sort_char = match sort_by {
-        crate::config::SortBy::Name => "n",
-        crate::config::SortBy::Size => "s",
-        crate::config::SortBy::Modified => "t",
-        crate::config::SortBy::Extension => "e",
+    let sort = match sort_by {
+        SortBy::Name => "name",
+        SortBy::Size => "size",
+        SortBy::Modified => "time",
+        SortBy::Extension => "ext",
     };
-    flags.push(sort_char);
+    let arrow = if reverse_sort { "↑" } else { "↓" };
 
-    spans.push(Span::styled(
-        format!("[{}]", flags.join("")),
-        Style::default().fg(Color::DarkGray),
+    let mut right: Vec<Span> = Vec::new();
+    for flag in &flags {
+        right.push(Span::styled(
+            format!(" {flag} "),
+            Style::default()
+                .bg(parse_color(&colors.border))
+                .fg(muted),
+        ));
+        right.push(Span::raw(" "));
+    }
+    right.push(Span::styled(
+        format!(" {sort}{arrow} "),
+        Style::default()
+            .bg(parse_color(&colors.border))
+            .fg(accent),
     ));
+    right.push(Span::raw(" "));
+    right.push(Span::styled(
+        " ? ",
+        Style::default()
+            .bg(accent)
+            .fg(parse_color(&colors.bg))
+            .add_modifier(Modifier::BOLD),
+    ));
+    right.push(Span::styled(" help ", Style::default().fg(muted)));
 
-    let paragraph = Paragraph::new(Line::from(spans))
-        .block(Block::default().borders(Borders::NONE))
-        .style(Style::default().bg(Color::Black));
+    let left_width: usize = left.iter().map(|span| span.content.width()).sum();
+    let right_width: usize = right.iter().map(|span| span.content.width()).sum();
+    let total = area.width as usize;
 
+    if left_width + right_width < total {
+        let gap = total - left_width - right_width;
+        left.push(Span::raw(" ".repeat(gap)));
+        left.extend(right);
+    }
+
+    let paragraph = Paragraph::new(Line::from(left)).style(Style::default().bg(bg));
     frame.render_widget(paragraph, area);
 }
 
-fn format_size(size: u64) -> String {
-    const UNITS: &[&str] = &["B", "K", "M", "G", "T"];
-    let mut size = size as f64;
-    let mut unit = 0;
-    while size >= 1024.0 && unit < UNITS.len() - 1 {
-        size /= 1024.0;
-        unit += 1;
-    }
-    if unit == 0 {
-        format!("{}{}", size as u64, UNITS[unit])
-    } else {
-        format!("{:.1}{}", size, UNITS[unit])
+fn mode_style(mode: AppMode, accent: Color) -> (&'static str, Color) {
+    match mode {
+        AppMode::Normal => ("NORMAL", accent),
+        AppMode::Search => ("SEARCH", Color::Rgb(125, 207, 255)),
+        AppMode::Rename => ("RENAME", Color::Rgb(224, 175, 104)),
+        AppMode::NewFile => ("NEW FILE", Color::Rgb(158, 206, 106)),
+        AppMode::NewDir => ("NEW DIR", Color::Rgb(158, 206, 106)),
+        AppMode::ConfirmDelete => ("DELETE", Color::Rgb(247, 118, 142)),
+        AppMode::ConfirmQuit => ("QUIT", Color::Rgb(247, 118, 142)),
+        AppMode::Help => ("HELP", Color::Rgb(187, 154, 247)),
     }
 }
 
