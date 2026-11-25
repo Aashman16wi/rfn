@@ -1,7 +1,10 @@
 use crate::types::{FileEntry, PreviewContent};
 use anyhow::Result;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::UNIX_EPOCH;
 
 const MAX_TEXT_LINES: usize = 200;
 const MAX_ARCHIVE_ENTRIES: usize = 100;
@@ -28,11 +31,24 @@ pub async fn generate_preview(
     let ext = entry.extension().unwrap_or("").to_lowercase();
     let name = entry.name.to_lowercase();
 
+    // SVG is text to the image crate, so rasterize it first.
+    if show_images && (ext == "svg" || mime == "image/svg+xml") {
+        if let Some(thumb) = make_thumbnail(&entry.path, ThumbKind::Svg).await {
+            return Ok(PreviewContent::image(thumb));
+        }
+        return read_text_preview(&entry.path).await;
+    }
+
     if show_images && is_image(mime, &ext) {
         return Ok(PreviewContent::image(entry.path.clone()));
     }
 
     if ext == "pdf" || mime == "application/pdf" {
+        if show_images {
+            if let Some(thumb) = make_thumbnail(&entry.path, ThumbKind::Pdf).await {
+                return Ok(PreviewContent::image(thumb));
+            }
+        }
         return Ok(read_pdf_text(&entry.path).await);
     }
 
@@ -41,6 +57,11 @@ pub async fn generate_preview(
     }
 
     if is_video(&ext, mime) {
+        if show_images {
+            if let Some(thumb) = make_thumbnail(&entry.path, ThumbKind::Video).await {
+                return Ok(PreviewContent::image(thumb));
+            }
+        }
         return Ok(read_media_preview(&entry.path, true).await);
     }
 
@@ -549,6 +570,81 @@ fn format_size(size: u64) -> String {
     } else {
         format!("{value:.1}{}", UNITS[unit])
     }
+}
+
+#[derive(Clone, Copy)]
+enum ThumbKind {
+    Svg,
+    Pdf,
+    Video,
+}
+
+async fn make_thumbnail(path: &Path, kind: ThumbKind) -> Option<PathBuf> {
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || build_thumbnail(&path, kind).ok())
+        .await
+        .ok()
+        .flatten()
+}
+
+fn thumb_target(path: &Path, kind: ThumbKind) -> PathBuf {
+    let mut hasher = DefaultHasher::new();
+    path.hash(&mut hasher);
+    if let Ok(modified) = std::fs::metadata(path).and_then(|meta| meta.modified()) {
+        if let Ok(age) = modified.duration_since(UNIX_EPOCH) {
+            age.as_secs().hash(&mut hasher);
+        }
+    }
+    let prefix = match kind {
+        ThumbKind::Svg => "svg",
+        ThumbKind::Pdf => "pdf",
+        ThumbKind::Video => "video",
+    };
+    preview_cache_dir().join(format!("{prefix}-{:016x}.png", hasher.finish()))
+}
+
+fn build_thumbnail(path: &Path, kind: ThumbKind) -> Result<PathBuf> {
+    let out = thumb_target(path, kind);
+    if out.exists() {
+        return Ok(out);
+    }
+    std::fs::create_dir_all(preview_cache_dir())?;
+
+    let status = match kind {
+        ThumbKind::Svg => Command::new("rsvg-convert")
+            .args(["-w", "1200"])
+            .arg(path)
+            .arg("-o")
+            .arg(&out)
+            .status()?,
+        ThumbKind::Pdf => Command::new("pdftoppm")
+            .args([
+                "-f",
+                "1",
+                "-l",
+                "1",
+                "-singlefile",
+                "-png",
+                "-scale-to-x",
+                "1200",
+                "-scale-to-y",
+                "-1",
+            ])
+            .arg(path)
+            .arg(out.with_extension(""))
+            .status()?,
+        ThumbKind::Video => Command::new("ffmpeg")
+            .args(["-y", "-loglevel", "error", "-ss", "1", "-i"])
+            .arg(path)
+            .args(["-frames:v", "1", "-vf", "scale=1200:-2"])
+            .arg(&out)
+            .status()?,
+    };
+
+    if !status.success() || !out.exists() {
+        anyhow::bail!("thumbnail command failed");
+    }
+    Ok(out)
 }
 
 /// Temporary directory for generated previews (PDF pages, video frames, SVG).
