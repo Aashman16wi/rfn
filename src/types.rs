@@ -77,6 +77,7 @@ pub enum PreviewType {
 pub struct PreviewContent {
     pub content: String,
     pub preview_type: PreviewType,
+    pub image_path: Option<PathBuf>,
     pub truncated: bool,
 }
 
@@ -85,14 +86,16 @@ impl PreviewContent {
         Self {
             content,
             preview_type: PreviewType::Text,
+            image_path: None,
             truncated: false,
         }
     }
 
-    pub fn image() -> Self {
+    pub fn image(path: PathBuf) -> Self {
         Self {
             content: String::new(),
             preview_type: PreviewType::Image,
+            image_path: Some(path),
             truncated: false,
         }
     }
@@ -101,6 +104,7 @@ impl PreviewContent {
         Self {
             content: "[Binary file]".to_string(),
             preview_type: PreviewType::Binary,
+            image_path: None,
             truncated: false,
         }
     }
@@ -109,6 +113,7 @@ impl PreviewContent {
         Self {
             content: "[Directory]".to_string(),
             preview_type: PreviewType::Directory,
+            image_path: None,
             truncated: false,
         }
     }
@@ -117,6 +122,7 @@ impl PreviewContent {
         Self {
             content: String::new(),
             preview_type: PreviewType::None,
+            image_path: None,
             truncated: false,
         }
     }
