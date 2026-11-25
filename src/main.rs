@@ -18,7 +18,6 @@ use crossterm::{
 };
 use ratatui::backend::CrosstermBackend;
 use std::io;
-use tokio::signal;
 
 #[derive(Parser, Debug)]
 #[command(name = "rfn", version, about = "A minimal async terminal file manager")]

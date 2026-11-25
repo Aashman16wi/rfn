@@ -1,4 +1,4 @@
-use crate::types::{FileEntry, PreviewContent, PreviewType};
+use crate::types::{FileEntry, PreviewContent};
 use anyhow::Result;
 use std::path::Path;
 

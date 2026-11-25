@@ -3,8 +3,7 @@ use crate::fs::{apply_git_status, find_git_root, get_git_status, read_dir, sort_
 use crate::keys::{Action, KeyMapper};
 use crate::preview::generate_preview;
 use crate::types::{AppMode, ClipboardOp, FileEntry, PreviewContent};
-use crate::ui::file_list::{go_to_bottom, go_to_top, next, page_down, page_up, previous};
-use crate::ui::{layout};
+use crate::ui::file_list::{next, previous};
 use crate::ui::help::render as render_help;
 use anyhow::Result;
 use crossterm::event::{Event, KeyEventKind};

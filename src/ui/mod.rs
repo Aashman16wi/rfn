@@ -3,12 +3,10 @@ pub mod preview;
 pub mod status_bar;
 pub mod help;
 
-use crate::types::{AppMode, FileEntry, PreviewContent};
 use crate::config::ColorConfig;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style},
-    Frame,
 };
 
 pub fn layout(area: Rect, show_preview: bool, show_help: bool) -> (Rect, Rect, Rect) {

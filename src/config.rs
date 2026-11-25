@@ -1,7 +1,6 @@
 use config::{Config, Environment, File};
 use dirs::config_dir;
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
