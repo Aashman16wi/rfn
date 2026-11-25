@@ -60,7 +60,12 @@ async fn main() -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = ratatui::Terminal::new(backend)?;
 
-    let mut app = App::new(config, start_path).await?;
+    // Ask the terminal which graphics protocol it supports. Must happen after
+    // entering the alternate screen but before the event loop reads input.
+    let picker = ratatui_image::picker::Picker::from_query_stdio()
+        .unwrap_or_else(|_| ratatui_image::picker::Picker::from_fontsize((8, 16)));
+
+    let mut app = App::new(config, start_path, picker).await?;
 
     let result = app.run(&mut terminal).await;
 

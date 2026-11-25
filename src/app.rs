@@ -2,7 +2,7 @@ use crate::config::{AppConfig, SortBy};
 use crate::fs::{apply_git_status, find_git_root, get_git_status, read_dir, sort_entries};
 use crate::keys::{Action, KeyMapper};
 use crate::preview::generate_preview;
-use crate::types::{AppMode, ClipboardOp, FileEntry, PreviewContent};
+use crate::types::{AppMode, ClipboardOp, FileEntry, PreviewContent, PreviewType};
 use crate::ui::file_list::{next, previous};
 use crate::ui::help::render as render_help;
 use anyhow::Result;
@@ -11,6 +11,7 @@ use ratatui::{
     backend::CrosstermBackend,
     Terminal,
 };
+use ratatui_image::{picker::Picker, protocol::StatefulProtocol};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -19,12 +20,14 @@ use tokio::time::interval;
 pub struct App {
     config: AppConfig,
     key_mapper: KeyMapper,
+    picker: Picker,
 
     current_path: PathBuf,
     entries: Vec<FileEntry>,
     list_state: ratatui::widgets::ListState,
 
     preview_content: PreviewContent,
+    preview_protocol: Option<StatefulProtocol>,
 
     git_statuses: Vec<(PathBuf, crate::types::GitStatus)>,
     git_root: Option<PathBuf>,
@@ -50,7 +53,11 @@ pub struct App {
 }
 
 impl App {
-    pub async fn new(config: AppConfig, start_path: std::path::PathBuf) -> Result<Self> {
+    pub async fn new(
+        config: AppConfig,
+        start_path: std::path::PathBuf,
+        picker: Picker,
+    ) -> Result<Self> {
         let current_path = if start_path.is_absolute() {
             start_path
         } else {
@@ -67,10 +74,12 @@ impl App {
         let mut app = Self {
             config,
             key_mapper,
+            picker,
             current_path,
             entries: Vec::new(),
             list_state: ratatui::widgets::ListState::default(),
             preview_content: PreviewContent::none(),
+            preview_protocol: None,
             git_statuses: Vec::new(),
             git_root: None,
             mode: AppMode::Normal,
@@ -172,25 +181,53 @@ impl App {
     }
 
     async fn update_preview(&mut self) {
+        self.preview_protocol = None;
+
         if !self.show_preview {
             self.preview_content = PreviewContent::none();
             return;
         }
 
-        if let Some(selected) = self.list_state.selected() {
-            if let Some(entry) = self.entries.get(selected) {
-                let entry = entry.clone();
-                let max_size = self.config.preview.max_size;
-                let show_images = self.config.preview.show_images;
+        let entry = match self.selected_entry().cloned() {
+            Some(entry) => entry,
+            None => {
+                self.preview_content = PreviewContent::none();
+                return;
+            }
+        };
 
-                match generate_preview(&entry, max_size, show_images).await {
-                    Ok(content) => self.preview_content = content,
-                    Err(_) => self.preview_content = PreviewContent::none(),
+        let max_size = self.config.preview.max_size;
+        let show_images = self.config.preview.show_images;
+
+        self.preview_content = match generate_preview(&entry, max_size, show_images).await {
+            Ok(content) => content,
+            Err(_) => PreviewContent::none(),
+        };
+
+        if self.preview_content.preview_type == PreviewType::Image {
+            if let Some(path) = self.preview_content.image_path.clone() {
+                let decoded: anyhow::Result<image::DynamicImage> = (|| {
+                    let reader = image::ImageReader::open(&path)?.with_guessed_format()?;
+                    Ok(reader.decode()?)
+                })();
+
+                match decoded {
+                    Ok(img) => {
+                        self.preview_protocol = Some(self.picker.new_resize_protocol(img));
+                    }
+                    Err(e) => {
+                        self.preview_content =
+                            PreviewContent::text(format!("Cannot decode image\n\n{e}"));
+                    }
                 }
             }
-        } else {
-            self.preview_content = PreviewContent::none();
         }
+    }
+
+    fn selected_entry(&self) -> Option<&FileEntry> {
+        self.list_state
+            .selected()
+            .and_then(|index| self.entries.get(index))
     }
 
     fn render(&mut self, frame: &mut ratatui::Frame) {
@@ -233,6 +270,7 @@ impl App {
                 frame,
                 preview_area,
                 &self.preview_content,
+                self.preview_protocol.as_mut(),
                 &self.config.ui.colors,
             );
         }
@@ -302,9 +340,11 @@ impl App {
             }
             MouseEventKind::ScrollUp => {
                 previous(&mut self.list_state, self.entries.len());
+                self.update_preview().await;
             }
             MouseEventKind::ScrollDown => {
                 next(&mut self.list_state, self.entries.len());
+                self.update_preview().await;
             }
             _ => {}
         }
@@ -321,8 +361,14 @@ impl App {
                         self.should_quit = true;
                     }
                 }
-                Action::Up => previous(&mut self.list_state, self.entries.len()),
-                Action::Down => next(&mut self.list_state, self.entries.len()),
+                Action::Up => {
+                    previous(&mut self.list_state, self.entries.len());
+                    self.update_preview().await;
+                }
+                Action::Down => {
+                    next(&mut self.list_state, self.entries.len());
+                    self.update_preview().await;
+                }
                 Action::Left => self.go_parent().await?,
                 Action::Right | Action::Enter => self.enter().await?,
                 Action::Backspace => self.go_parent().await?,
