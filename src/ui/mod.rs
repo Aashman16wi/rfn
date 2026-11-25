@@ -2,6 +2,7 @@ pub mod file_list;
 pub mod preview;
 pub mod status_bar;
 pub mod help;
+pub mod prompt;
 
 use crate::config::ColorConfig;
 use ratatui::{

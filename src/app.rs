@@ -352,7 +352,44 @@ impl App {
             &self.config.ui.colors,
         );
 
-        
+        // Typing prompt replaces the status bar; confirmations float on top.
+        match self.mode {
+            AppMode::Search => crate::ui::prompt::render_input(
+                frame,
+                status_area,
+                self.mode,
+                &self.search_query,
+                &self.config.ui.colors,
+            ),
+            AppMode::Rename => crate::ui::prompt::render_input(
+                frame,
+                status_area,
+                self.mode,
+                &self.rename_buffer,
+                &self.config.ui.colors,
+            ),
+            AppMode::NewFile | AppMode::NewDir => crate::ui::prompt::render_input(
+                frame,
+                status_area,
+                self.mode,
+                &self.new_name_buffer,
+                &self.config.ui.colors,
+            ),
+            AppMode::ConfirmDelete | AppMode::ConfirmQuit => {
+                let name = self
+                    .selected_entry()
+                    .map(|entry| entry.name.clone())
+                    .unwrap_or_default();
+                crate::ui::prompt::render_confirm(
+                    frame,
+                    area,
+                    self.mode,
+                    &name,
+                    &self.config.ui.colors,
+                );
+            }
+            _ => {}
+        }
     }
 
     async fn handle_event(&mut self, event: Event) -> Result<()> {

@@ -86,13 +86,11 @@ impl KeyMapper {
 }
 
 fn parse_key(s: &str) -> Option<(KeyCode, KeyModifiers)> {
-    let s = s.to_lowercase();
     let parts: Vec<&str> = s.split('+').collect();
     let mut mods = KeyModifiers::empty();
-    let mut code = None;
 
     for part in &parts[..parts.len().saturating_sub(1)] {
-        match *part {
+        match part.to_lowercase().as_str() {
             "ctrl" | "control" => mods |= KeyModifiers::CONTROL,
             "shift" => mods |= KeyModifiers::SHIFT,
             "alt" | "meta" => mods |= KeyModifiers::ALT,
@@ -101,7 +99,9 @@ fn parse_key(s: &str) -> Option<(KeyCode, KeyModifiers)> {
     }
 
     let key = parts.last().copied().unwrap_or("");
-    code = match key {
+    let lower = key.to_lowercase();
+
+    let code = match lower.as_str() {
         "up" => Some(KeyCode::Up),
         "down" => Some(KeyCode::Down),
         "left" => Some(KeyCode::Left),
@@ -128,8 +128,20 @@ fn parse_key(s: &str) -> Option<(KeyCode, KeyModifiers)> {
         "f10" => Some(KeyCode::F(10)),
         "f11" => Some(KeyCode::F(11)),
         "f12" => Some(KeyCode::F(12)),
-        c if c.len() == 1 => Some(KeyCode::Char(c.chars().next().unwrap())),
-        _ => None,
+        _ => {
+            let mut chars = key.chars();
+            let mut c = chars.next()?;
+            if chars.next().is_some() {
+                return None;
+            }
+            // Crossterm reports shifted letters as uppercase + SHIFT.
+            if c.is_ascii_uppercase() {
+                mods |= KeyModifiers::SHIFT;
+            } else if mods.contains(KeyModifiers::SHIFT) && c.is_ascii_lowercase() {
+                c = c.to_ascii_uppercase();
+            }
+            Some(KeyCode::Char(c))
+        }
     };
 
     code.map(|c| (c, mods))
