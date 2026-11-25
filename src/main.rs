@@ -51,13 +51,15 @@ async fn main() -> Result<()> {
 
     let config = AppConfig::load()?;
 
+    let start_path = std::path::PathBuf::from(&args.path);
+
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = ratatui::Terminal::new(backend)?;
 
-    let mut app = App::new(config).await?;
+    let mut app = App::new(config, start_path).await?;
 
     let result = app.run(&mut terminal).await;
 

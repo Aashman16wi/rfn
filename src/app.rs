@@ -51,8 +51,12 @@ pub struct App {
 }
 
 impl App {
-    pub async fn new(config: AppConfig) -> Result<Self> {
-        let current_path = std::env::current_dir()?;
+    pub async fn new(config: AppConfig, start_path: std::path::PathBuf) -> Result<Self> {
+        let current_path = if start_path.is_absolute() {
+            start_path
+        } else {
+            std::env::current_dir()?.join(start_path)
+        };
         let show_hidden = config.ui.show_hidden;
         let show_preview = config.preview.enabled;
         let show_git = config.git.enabled;
