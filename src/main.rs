@@ -51,6 +51,7 @@ async fn main() -> Result<()> {
     }
 
     let config = AppConfig::load()?;
+    let picker = crate::app::create_picker(&config);
 
     let start_path = std::path::PathBuf::from(&args.path);
 
@@ -59,11 +60,6 @@ async fn main() -> Result<()> {
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = ratatui::Terminal::new(backend)?;
-
-    // Ask the terminal which graphics protocol it supports. Must happen after
-    // entering the alternate screen but before the event loop reads input.
-    let picker = ratatui_image::picker::Picker::from_query_stdio()
-        .unwrap_or_else(|_| ratatui_image::picker::Picker::from_fontsize((8, 16)));
 
     let mut app = App::new(config, start_path, picker).await?;
 

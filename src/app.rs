@@ -11,11 +11,50 @@ use ratatui::{
     backend::CrosstermBackend,
     Terminal,
 };
-use ratatui_image::{picker::Picker, protocol::StatefulProtocol};
+use ratatui_image::{
+    picker::{Picker, ProtocolType},
+    protocol::StatefulProtocol,
+};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::time::interval;
+
+/// Build an image picker without poking at stdio. `Picker::from_query_stdio`
+/// spawns a thread that can disable raw mode behind our back when the terminal
+/// does not answer its queries, which breaks all keyboard input.
+pub fn create_picker(config: &AppConfig) -> Picker {
+    let protocol = match config.preview.image_backend {
+        crate::config::ImageBackend::Kitty => ProtocolType::Kitty,
+        crate::config::ImageBackend::Iterm => ProtocolType::Iterm2,
+        crate::config::ImageBackend::Sixel => ProtocolType::Sixel,
+        crate::config::ImageBackend::Chafa => ProtocolType::Halfblocks,
+        crate::config::ImageBackend::Auto => detect_protocol(),
+    };
+
+    let mut picker = Picker::from_fontsize((10, 20));
+    picker.set_protocol_type(protocol);
+    picker
+}
+
+fn detect_protocol() -> ProtocolType {
+    let term = std::env::var("TERM").unwrap_or_default().to_lowercase();
+    let term_program = std::env::var("TERM_PROGRAM").unwrap_or_default();
+
+    if std::env::var_os("KITTY_WINDOW_ID").is_some()
+        || term.contains("kitty")
+        || term.contains("ghostty")
+        || term_program == "WezTerm"
+    {
+        ProtocolType::Kitty
+    } else if term_program == "iTerm.app" {
+        ProtocolType::Iterm2
+    } else if term.contains("sixel") || term.contains("foot") || term.contains("mlterm") {
+        ProtocolType::Sixel
+    } else {
+        ProtocolType::Halfblocks
+    }
+}
 
 pub struct App {
     config: AppConfig,
@@ -24,6 +63,7 @@ pub struct App {
 
     current_path: PathBuf,
     entries: Vec<FileEntry>,
+    display: Vec<FileEntry>,
     list_state: ratatui::widgets::ListState,
 
     preview_content: PreviewContent,
@@ -77,6 +117,7 @@ impl App {
             picker,
             current_path,
             entries: Vec::new(),
+            display: Vec::new(),
             list_state: ratatui::widgets::ListState::default(),
             preview_content: PreviewContent::none(),
             preview_protocol: None,
@@ -103,18 +144,20 @@ impl App {
     }
 
     pub async fn run(&mut self, terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
-        let mut tick_interval = interval(Duration::from_millis(100));
+        let mut tick_interval = interval(Duration::from_secs(2));
+        terminal.draw(|f| self.render(f))?;
 
         loop {
-            terminal.draw(|f| self.render(f))?;
-
             tokio::select! {
                 _ = tick_interval.tick() => {
-                    self.tick().await?;
+                    if self.tick().await? {
+                        terminal.draw(|f| self.render(f))?;
+                    }
                 }
                 event = self.read_event() => {
                     if let Some(event) = event? {
                         self.handle_event(event).await?;
+                        terminal.draw(|f| self.render(f))?;
                     }
                 }
             }
@@ -135,28 +178,56 @@ impl App {
         }
     }
 
-    async fn tick(&mut self) -> Result<()> {
-        if self.last_tick.elapsed() > Duration::from_secs(2) {
-            self.refresh_git().await?;
-            self.last_tick = std::time::Instant::now();
+    async fn tick(&mut self) -> Result<bool> {
+        if self.last_tick.elapsed() < Duration::from_secs(2) {
+            return Ok(false);
         }
-        Ok(())
+
+        let before: Vec<_> = self.display.iter().map(|entry| entry.git_status).collect();
+        self.refresh_git().await?;
+        self.rebuild_display();
+        let after: Vec<_> = self.display.iter().map(|entry| entry.git_status).collect();
+        self.last_tick = std::time::Instant::now();
+
+        Ok(before != after)
     }
 
     async fn refresh(&mut self) -> Result<()> {
         self.entries = read_dir(&self.current_path, self.show_hidden).await?;
         sort_entries(&mut self.entries, self.sort_by, self.config.behavior.sort_dirs_first, self.reverse_sort);
 
-        if self.entries.is_empty() {
-            self.list_state.select(None);
-        } else if self.list_state.selected().is_none() || self.list_state.selected().unwrap() >= self.entries.len() {
-            self.list_state.select(Some(0));
-        }
-
         self.refresh_git().await?;
+        self.rebuild_display();
         self.update_preview().await;
 
         Ok(())
+    }
+
+    fn rebuild_display(&mut self) {
+        let query = self.search_query.to_lowercase();
+        self.display = if query.is_empty() {
+            self.entries.clone()
+        } else {
+            self.entries
+                .iter()
+                .filter(|entry| entry.name.to_lowercase().contains(&query))
+                .cloned()
+                .collect()
+        };
+
+        if self.display.is_empty() {
+            self.list_state.select(None);
+            *self.list_state.offset_mut() = 0;
+        } else {
+            let selected = self
+                .list_state
+                .selected()
+                .unwrap_or(0)
+                .min(self.display.len() - 1);
+            self.list_state.select(Some(selected));
+            let offset = self.list_state.offset().min(self.display.len() - 1);
+            *self.list_state.offset_mut() = offset;
+        }
     }
 
     async fn refresh_git(&mut self) -> Result<()> {
@@ -227,7 +298,7 @@ impl App {
     fn selected_entry(&self) -> Option<&FileEntry> {
         self.list_state
             .selected()
-            .and_then(|index| self.entries.get(index))
+            .and_then(|index| self.display.get(index))
     }
 
     fn render(&mut self, frame: &mut ratatui::Frame) {
@@ -241,23 +312,11 @@ impl App {
         let (list_area, preview_area, status_area) =
             crate::ui::layout(area, self.show_preview, false);
 
-        // Filter entries for search
-        let filtered_entries: Vec<FileEntry> = if self.search_query.is_empty() {
-            self.entries.clone()
-        } else {
-            let query = self.search_query.to_lowercase();
-            self.entries
-                .iter()
-                .filter(|e| e.name.to_lowercase().contains(&query))
-                .cloned()
-                .collect()
-        };
-
         // File list
         crate::ui::file_list::render(
             frame,
             list_area,
-            &filtered_entries,
+            &self.display,
             &mut self.list_state,
             &self.config.ui.colors,
             self.config.ui.show_icons,
@@ -276,16 +335,7 @@ impl App {
         }
 
         // Status bar
-        let filtered_entries: Vec<&FileEntry> = if self.search_query.is_empty() {
-            self.entries.iter().collect()
-        } else {
-            let query = self.search_query.to_lowercase();
-            self.entries
-                .iter()
-                .filter(|e| e.name.to_lowercase().contains(&query))
-                .collect()
-        };
-        let selected_entry = self.list_state.selected().and_then(|i| filtered_entries.get(i).copied());
+        let selected_entry = self.selected_entry();
         crate::ui::status_bar::render(
             frame,
             status_area,
@@ -339,11 +389,11 @@ impl App {
                 // This would need the render area to calculate which item was clicked
             }
             MouseEventKind::ScrollUp => {
-                previous(&mut self.list_state, self.entries.len());
+                previous(&mut self.list_state, self.display.len());
                 self.update_preview().await;
             }
             MouseEventKind::ScrollDown => {
-                next(&mut self.list_state, self.entries.len());
+                next(&mut self.list_state, self.display.len());
                 self.update_preview().await;
             }
             _ => {}
@@ -352,6 +402,13 @@ impl App {
     }
 
     async fn handle_normal(&mut self, key: crossterm::event::KeyEvent) -> Result<()> {
+        if key.code == crossterm::event::KeyCode::Esc && !self.search_query.is_empty() {
+            self.search_query.clear();
+            self.rebuild_display();
+            self.update_preview().await;
+            return Ok(());
+        }
+
         if let Some(action) = self.key_mapper.get_action(key) {
             match action {
                 Action::Quit => {
@@ -362,11 +419,11 @@ impl App {
                     }
                 }
                 Action::Up => {
-                    previous(&mut self.list_state, self.entries.len());
+                    previous(&mut self.list_state, self.display.len());
                     self.update_preview().await;
                 }
                 Action::Down => {
-                    next(&mut self.list_state, self.entries.len());
+                    next(&mut self.list_state, self.display.len());
                     self.update_preview().await;
                 }
                 Action::Left => self.go_parent().await?,
@@ -385,7 +442,11 @@ impl App {
                 Action::Copy => self.copy_selected(),
                 Action::Cut => self.cut_selected(),
                 Action::Paste => self.paste().await?,
-                Action::Search => self.mode = AppMode::Search,
+                Action::Search => {
+                    self.search_query.clear();
+                    self.rebuild_display();
+                    self.mode = AppMode::Search;
+                }
                 Action::ToggleHidden => {
                     self.show_hidden = !self.show_hidden;
                     self.refresh().await?;
@@ -398,6 +459,7 @@ impl App {
                     self.show_git = !self.show_git;
                     if self.show_git {
                         self.refresh_git().await?;
+                        self.rebuild_display();
                     }
                 }
                 Action::Help => self.help_visible = true,
@@ -419,42 +481,33 @@ impl App {
             crossterm::event::KeyCode::Esc => {
                 self.mode = AppMode::Normal;
                 self.search_query.clear();
+                self.rebuild_display();
+                self.update_preview().await;
             }
             crossterm::event::KeyCode::Enter => {
                 self.mode = AppMode::Normal;
             }
             crossterm::event::KeyCode::Backspace => {
                 self.search_query.pop();
-                self.filter_entries();
+                self.rebuild_display();
+                self.update_preview().await;
+            }
+            crossterm::event::KeyCode::Up => {
+                previous(&mut self.list_state, self.display.len());
+                self.update_preview().await;
+            }
+            crossterm::event::KeyCode::Down => {
+                next(&mut self.list_state, self.display.len());
+                self.update_preview().await;
             }
             crossterm::event::KeyCode::Char(c) => {
                 self.search_query.push(c);
-                self.filter_entries();
+                self.rebuild_display();
+                self.update_preview().await;
             }
             _ => {}
         }
         Ok(())
-    }
-
-    fn filter_entries(&mut self) {
-        let query = self.search_query.to_lowercase();
-        if query.is_empty() {
-            return;
-        }
-        // Filter is applied in render by checking the search query
-        // We keep all entries but the list rendering will need to filter
-    }
-
-    fn get_filtered_entries(&self) -> Vec<&FileEntry> {
-        if self.search_query.is_empty() {
-            self.entries.iter().collect()
-        } else {
-            let query = self.search_query.to_lowercase();
-            self.entries
-                .iter()
-                .filter(|e| e.name.to_lowercase().contains(&query))
-                .collect()
-        }
     }
 
     async fn handle_rename(&mut self, key: crossterm::event::KeyEvent) -> Result<()> {
@@ -565,15 +618,16 @@ impl App {
     }
 
     async fn enter(&mut self) -> Result<()> {
-        if let Some(selected) = self.list_state.selected() {
-            if let Some(entry) = self.entries.get(selected) {
-                if entry.is_dir() {
-                    self.current_path = entry.path.clone();
-                    self.refresh().await?;
-                } else {
-                    // Open file with default application
-                    let _ = opener::open(&entry.path);
-                }
+        if let Some(entry) = self.selected_entry().cloned() {
+            if entry.is_dir() {
+                self.current_path = entry.path;
+                self.search_query.clear();
+                self.list_state.select(Some(0));
+                *self.list_state.offset_mut() = 0;
+                self.refresh().await?;
+            } else {
+                // Open file with default application
+                let _ = opener::open(&entry.path);
             }
         }
         Ok(())
@@ -582,6 +636,9 @@ impl App {
     async fn go_parent(&mut self) -> Result<()> {
         if let Some(parent) = self.current_path.parent() {
             self.current_path = parent.to_path_buf();
+            self.search_query.clear();
+            self.list_state.select(Some(0));
+            *self.list_state.offset_mut() = 0;
             self.refresh().await?;
         }
         Ok(())
@@ -590,27 +647,26 @@ impl App {
     async fn go_home(&mut self) -> Result<()> {
         if let Some(home) = dirs::home_dir() {
             self.current_path = home;
+            self.search_query.clear();
+            self.list_state.select(Some(0));
+            *self.list_state.offset_mut() = 0;
             self.refresh().await?;
         }
         Ok(())
     }
 
     fn start_rename(&mut self) {
-        if let Some(selected) = self.list_state.selected() {
-            if let Some(entry) = self.entries.get(selected) {
-                self.rename_buffer = entry.name.clone();
-                self.mode = AppMode::Rename;
-            }
+        if let Some(entry) = self.selected_entry() {
+            self.rename_buffer = entry.name.clone();
+            self.mode = AppMode::Rename;
         }
     }
 
     async fn rename_selected(&mut self, new_name: &str) -> Result<()> {
-        if let Some(selected) = self.list_state.selected() {
-            if let Some(entry) = self.entries.get(selected) {
-                let new_path = entry.path.with_file_name(new_name);
-                tokio::fs::rename(&entry.path, &new_path).await?;
-                self.refresh().await?;
-            }
+        if let Some(entry) = self.selected_entry().cloned() {
+            let new_path = entry.path.with_file_name(new_name);
+            tokio::fs::rename(&entry.path, &new_path).await?;
+            self.refresh().await?;
         }
         Ok(())
     }
@@ -630,20 +686,16 @@ impl App {
     }
 
     fn copy_selected(&mut self) {
-        if let Some(selected) = self.list_state.selected() {
-            if let Some(entry) = self.entries.get(selected) {
-                self.clipboard = ClipboardOp::Copy;
-                self.clipboard_paths = vec![entry.path.clone()];
-            }
+        if let Some(path) = self.selected_entry().map(|entry| entry.path.clone()) {
+            self.clipboard = ClipboardOp::Copy;
+            self.clipboard_paths = vec![path];
         }
     }
 
     fn cut_selected(&mut self) {
-        if let Some(selected) = self.list_state.selected() {
-            if let Some(entry) = self.entries.get(selected) {
-                self.clipboard = ClipboardOp::Cut;
-                self.clipboard_paths = vec![entry.path.clone()];
-            }
+        if let Some(path) = self.selected_entry().map(|entry| entry.path.clone()) {
+            self.clipboard = ClipboardOp::Cut;
+            self.clipboard_paths = vec![path];
         }
     }
 
@@ -673,15 +725,13 @@ impl App {
     }
 
     async fn delete_selected(&mut self) -> Result<()> {
-        if let Some(selected) = self.list_state.selected() {
-            if let Some(entry) = self.entries.get(selected) {
-                if entry.is_dir() {
-                    tokio::fs::remove_dir_all(&entry.path).await?;
-                } else {
-                    tokio::fs::remove_file(&entry.path).await?;
-                }
-                self.refresh().await?;
+        if let Some(entry) = self.selected_entry().cloned() {
+            if entry.is_dir() {
+                tokio::fs::remove_dir_all(&entry.path).await?;
+            } else {
+                tokio::fs::remove_file(&entry.path).await?;
             }
+            self.refresh().await?;
         }
         Ok(())
     }

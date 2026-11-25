@@ -72,34 +72,34 @@ pub fn render(
 }
 
 pub fn next(state: &mut ListState, len: usize) {
+    if len == 0 {
+        state.select(None);
+        return;
+    }
     let i = match state.selected() {
-        Some(i) => {
-            if i + 1 < len {
-                i + 1
-            } else {
-                0
-            }
-        }
-        None => 0,
+        Some(i) if i + 1 < len => i + 1,
+        Some(_) | None => 0,
     };
     state.select(Some(i));
 }
 
 pub fn previous(state: &mut ListState, len: usize) {
+    if len == 0 {
+        state.select(None);
+        return;
+    }
     let i = match state.selected() {
-        Some(i) => {
-            if i == 0 {
-                len - 1
-            } else {
-                i - 1
-            }
-        }
-        None => 0,
+        Some(0) | None => len - 1,
+        Some(i) => i - 1,
     };
     state.select(Some(i));
 }
 
 pub fn page_down(state: &mut ListState, len: usize, page_size: usize) {
+    if len == 0 {
+        state.select(None);
+        return;
+    }
     let i = match state.selected() {
         Some(i) => (i + page_size).min(len - 1),
         None => 0,
@@ -120,5 +120,9 @@ pub fn go_to_top(state: &mut ListState) {
 }
 
 pub fn go_to_bottom(state: &mut ListState, len: usize) {
-    state.select(Some(len - 1));
+    if len == 0 {
+        state.select(None);
+    } else {
+        state.select(Some(len - 1));
+    }
 }

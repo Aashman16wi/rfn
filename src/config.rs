@@ -75,7 +75,8 @@ pub struct PreviewConfig {
 #[serde(rename_all = "snake_case")]
 pub enum ImageBackend {
     Kitty,
-    Itterm,
+    #[serde(alias = "itterm")]
+    Iterm,
     Sixel,
     Chafa,
     Auto,
