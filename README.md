@@ -30,13 +30,16 @@ crates.io and there are no prebuilt binaries — build it from source.
   - audio/video metadata via `ffprobe`
   - archive contents for zip, tar, tar.gz, tar.xz, tar.bz2 and tar.zst
 - Git status markers per file.
-- Tabs, each with its own directory, selection and search.
+- Tabs, each with its own directory, selection and search; restored across restarts.
 - Visual selection for copying, cutting and deleting several files at once.
 - Bulk rename through `$EDITOR`.
 - Copy, cut, paste (asks before overwriting), rename, create, delete.
-- Delete moves files to the system trash by default.
+- Delete moves files to the system trash by default; trash browser (`T`) for restore.
+- Persistent copy/move queue (`Q`) for background operations.
+- Preview scroll (`J`/`K`) and reset (`0`).
+- Bookmarks (`m`/`M`) for quick directory access.
 - Hidden-file toggle and sort by name/size/time/extension.
-- Tokyo Night-ish colors, Nerd Font icons.
+- Tokyo Night-ish colors, Nerd Font icons; built-in themes: `tokyo-night` (default), `catppuccin-mocha`, `gruvbox-dark`, `nord`. Use `rfn --themes` to list, set `ui.theme` in config.
 
 ## Requirements
 
@@ -62,11 +65,17 @@ in the config.
 ```bash
 git clone https://github.com/Aashman16wi/rfn
 cd rfn
-cargo build --release
+cargo build --release --features "image-preview,pdf-preview,archive-preview"
 ./target/release/rfn
 ```
 
-To put it on your PATH:
+Or use the install script:
+
+```bash
+./install.sh  # builds with all features, installs to ~/.local/bin/rfn
+```
+
+To put it on your PATH manually:
 
 ```bash
 install -Dm755 target/release/rfn ~/.local/bin/rfn
@@ -92,6 +101,7 @@ Colors accept `#rrggbb` strings. Keys are arrays, for example:
 show_icons = true
 show_hidden = false
 show_parent = true
+theme = "tokyo-night"  # tokyo-night, catppuccin-mocha, gruvbox-dark, nord, or "custom"
 
 [behavior]
 confirm_delete = true
@@ -140,16 +150,19 @@ sort = ["s"]
 | `/` | Search |
 | `?` | Help |
 | `q` / `Ctrl+c` | Quit |
+| `m` / `M` | Bookmark dir / jump to bookmark |
+| `J` / `K` | Preview scroll down / up |
+| `0` | Reset preview |
+| `T` | Trash browser |
+| `o` | Open with command |
+| `Q` | Queue manager |
 
 Mouse wheel scrolls and left click selects.
 
 ## Limitations
 
-- No background task queue: large copies block the UI until they finish.
 - Directory conflicts during paste are replaced, not merged.
-- There is no trash browser for restoring deleted files.
-- No preview scrolling, image zoom, bookmarks or "open with" menu.
-- Tabs are not restored across restarts.
+- No image zoom or "open with" menu.
 - The UI is designed for terminals at least 100 columns wide; narrower
   terminals hide the parent column first.
 - Only Linux is tested.
