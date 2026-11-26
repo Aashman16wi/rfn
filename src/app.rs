@@ -77,6 +77,7 @@ pub struct App {
     git_root: Option<PathBuf>,
 
     mode: AppMode,
+    overwrite_count: usize,
     search_query: String,
     rename_buffer: String,
     new_name_buffer: String,
@@ -131,6 +132,7 @@ impl App {
             git_statuses: Vec::new(),
             git_root: None,
             mode: AppMode::Normal,
+            overwrite_count: 0,
             search_query: String::new(),
             rename_buffer: String::new(),
             new_name_buffer: String::new(),
@@ -513,6 +515,20 @@ impl App {
                     &self.config.ui.colors,
                 );
             }
+            AppMode::ConfirmOverwrite => {
+                let message = format!(
+                    "{} existing item{} will be replaced. Continue?",
+                    self.overwrite_count,
+                    if self.overwrite_count == 1 { "" } else { "s" }
+                );
+                crate::ui::prompt::render_confirm(
+                    frame,
+                    area,
+                    " Overwrite ",
+                    &message,
+                    &self.config.ui.colors,
+                );
+            }
             _ => {}
         }
     }
@@ -539,6 +555,7 @@ impl App {
                     AppMode::NewDir => self.handle_new_dir(key).await?,
                     AppMode::ConfirmDelete => self.handle_confirm_delete(key).await?,
                     AppMode::ConfirmQuit => self.handle_confirm_quit(key).await?,
+                    AppMode::ConfirmOverwrite => self.handle_confirm_overwrite(key).await?,
                 }
             }
             Event::Mouse(mouse) => {
@@ -663,7 +680,7 @@ impl App {
                 Action::NewDir => self.mode = AppMode::NewDir,
                 Action::Copy => self.copy_selected(),
                 Action::Cut => self.cut_selected(),
-                Action::Paste => self.paste().await?,
+                Action::Paste => self.start_paste().await?,
                 Action::Search => {
                     self.search_query.clear();
                     self.rebuild_display();
@@ -837,6 +854,22 @@ impl App {
         Ok(())
     }
 
+    async fn handle_confirm_overwrite(
+        &mut self,
+        key: crossterm::event::KeyEvent,
+    ) -> Result<()> {
+        match key.code {
+            crossterm::event::KeyCode::Char('y') | crossterm::event::KeyCode::Char('Y') => {
+                self.mode = AppMode::Normal;
+                self.paste(true).await?;
+            }
+            _ => {
+                self.mode = AppMode::Normal;
+            }
+        }
+        Ok(())
+    }
+
     async fn handle_help(&mut self, key: crossterm::event::KeyEvent) -> Result<()> {
         match key.code {
             crossterm::event::KeyCode::Char('?') | crossterm::event::KeyCode::Esc => {
@@ -941,13 +974,63 @@ impl App {
         }
     }
 
-    async fn paste(&mut self) -> Result<()> {
+    async fn start_paste(&mut self) -> Result<()> {
+        if self.clipboard == ClipboardOp::None || self.clipboard_paths.is_empty() {
+            return Ok(());
+        }
+
+        let mut conflicts = 0;
+        for src in &self.clipboard_paths {
+            let Some(file_name) = src.file_name() else {
+                continue;
+            };
+            let dst = self.current_path.join(file_name);
+            if dst == *src {
+                self.notice =
+                    Some("Source and destination are the same file".to_string());
+                return Ok(());
+            }
+            if dst.exists() {
+                conflicts += 1;
+            }
+        }
+
+        if conflicts > 0 {
+            self.overwrite_count = conflicts;
+            self.mode = AppMode::ConfirmOverwrite;
+        } else {
+            self.paste(false).await?;
+        }
+        Ok(())
+    }
+
+    async fn paste(&mut self, overwrite: bool) -> Result<()> {
         let mut failed = false;
         for src in &self.clipboard_paths {
             let Some(file_name) = src.file_name() else {
                 continue;
             };
             let dst = self.current_path.join(file_name);
+
+            if dst == *src {
+                self.notice =
+                    Some("Source and destination are the same file".to_string());
+                failed = true;
+                break;
+            }
+
+            if overwrite && dst.exists() {
+                let removal = if dst.is_dir() {
+                    tokio::fs::remove_dir_all(&dst).await
+                } else {
+                    tokio::fs::remove_file(&dst).await
+                };
+                if let Err(error) = removal {
+                    self.notice = Some(format!("Overwrite failed: {error}"));
+                    failed = true;
+                    break;
+                }
+            }
 
             let result = match self.clipboard {
                 ClipboardOp::Copy => {

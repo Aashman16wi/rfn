@@ -172,6 +172,7 @@ fn mode_style(mode: AppMode, accent: Color) -> (&'static str, Color) {
         AppMode::NewDir => ("NEW DIR", Color::Rgb(158, 206, 106)),
         AppMode::ConfirmDelete => ("DELETE", Color::Rgb(247, 118, 142)),
         AppMode::ConfirmQuit => ("QUIT", Color::Rgb(247, 118, 142)),
+        AppMode::ConfirmOverwrite => ("OVERWRITE", Color::Rgb(224, 175, 104)),
     }
 }
 

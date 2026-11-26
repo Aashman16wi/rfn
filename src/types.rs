@@ -119,6 +119,7 @@ pub enum AppMode {
     NewDir,
     ConfirmDelete,
     ConfirmQuit,
+    ConfirmOverwrite,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
