@@ -12,6 +12,7 @@ use ratatui::{
 };
 
 pub struct LayoutAreas {
+    pub tabs: Option<Rect>,
     pub top: Rect,
     pub parent: Option<Rect>,
     pub current: Rect,
@@ -19,17 +20,30 @@ pub struct LayoutAreas {
     pub status: Rect,
 }
 
-pub fn layout(area: Rect, show_preview: bool, show_parent: bool) -> LayoutAreas {
+pub fn layout(
+    area: Rect,
+    show_preview: bool,
+    show_parent: bool,
+    show_tabs: bool,
+) -> LayoutAreas {
+    let mut constraints = Vec::new();
+    if show_tabs {
+        constraints.push(Constraint::Length(1));
+    }
+    constraints.push(Constraint::Length(1));
+    constraints.push(Constraint::Min(0));
+    constraints.push(Constraint::Length(1));
+
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Min(0),
-            Constraint::Length(1),
-        ])
+        .constraints(constraints)
         .split(area);
 
-    let body = rows[1];
+    let (tabs, top, body, status) = if show_tabs {
+        (Some(rows[0]), rows[1], rows[2], rows[3])
+    } else {
+        (None, rows[0], rows[1], rows[2])
+    };
     let show_parent = show_parent && body.width >= 100;
     let show_preview = show_preview && body.width >= 70;
     let gap = 1;
@@ -72,11 +86,12 @@ pub fn layout(area: Rect, show_preview: bool, show_parent: bool) -> LayoutAreas 
     }
 
     LayoutAreas {
-        top: rows[0],
+        tabs,
+        top,
         parent,
         current,
         preview,
-        status: rows[2],
+        status,
     }
 }
 

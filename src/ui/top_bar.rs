@@ -10,6 +10,51 @@ use ratatui::{
 use std::path::Path;
 use unicode_width::UnicodeWidthStr;
 
+pub fn render_tabs(
+    frame: &mut Frame,
+    area: Rect,
+    tabs: &[(String, bool)],
+    colors: &ColorConfig,
+) {
+    let bg = parse_color(&colors.topbar_bg);
+    let muted = parse_color(&colors.muted);
+    let accent = parse_color(&colors.accent);
+
+    frame.render_widget(Block::default().style(Style::default().bg(bg)), area);
+
+    let mut spans = Vec::new();
+    let mut used = 0usize;
+
+    for (index, (title, active)) in tabs.iter().enumerate() {
+        let label = format!(" {} {} ", index + 1, title);
+        let width = label.width();
+        if used + width > area.width as usize {
+            break;
+        }
+        used += width + 1;
+
+        spans.push(Span::styled(
+            label,
+            if *active {
+                Style::default()
+                    .bg(accent)
+                    .fg(parse_color(&colors.bg))
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+                    .bg(parse_color(&colors.border))
+                    .fg(muted)
+            },
+        ));
+        spans.push(Span::raw(" "));
+    }
+
+    frame.render_widget(
+        Paragraph::new(Line::from(spans)).style(Style::default().bg(bg)),
+        area,
+    );
+}
+
 pub fn render(
     frame: &mut Frame,
     area: Rect,

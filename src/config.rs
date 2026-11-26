@@ -121,6 +121,10 @@ pub struct KeyConfig {
     pub goto_home: Vec<String>,
     pub sort: Vec<String>,
     pub reverse_sort: Vec<String>,
+    pub tab_new: Vec<String>,
+    pub tab_close: Vec<String>,
+    pub tab_next: Vec<String>,
+    pub tab_prev: Vec<String>,
 }
 
 impl Default for AppConfig {
@@ -232,6 +236,10 @@ impl Default for KeyConfig {
             goto_home: vec!["~".into()],
             sort: vec!["s".into()],
             reverse_sort: vec!["S".into()],
+            tab_new: vec!["t".into()],
+            tab_close: vec!["w".into()],
+            tab_next: vec!["tab".into()],
+            tab_prev: vec!["backtab".into()],
         }
     }
 }
@@ -296,7 +304,11 @@ impl AppConfig {
             .set_default("keys.goto_parent", vec!["H", "ctrl+h"])?
             .set_default("keys.goto_home", vec!["~"])?
             .set_default("keys.sort", vec!["s"])?
-            .set_default("keys.reverse_sort", vec!["S"])?;
+            .set_default("keys.reverse_sort", vec!["S"])?
+            .set_default("keys.tab_new", vec!["t"])?
+            .set_default("keys.tab_close", vec!["w"])?
+            .set_default("keys.tab_next", vec!["tab"])?
+            .set_default("keys.tab_prev", vec!["backtab"])?;
 
         if let Some(config_dir) = config_dir() {
             let config_path = config_dir.join("rfn").join("config.toml");

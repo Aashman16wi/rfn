@@ -58,6 +58,16 @@ fn detect_protocol() -> ProtocolType {
     }
 }
 
+#[derive(Clone)]
+struct TabState {
+    current_path: PathBuf,
+    entries: Vec<FileEntry>,
+    display: Vec<FileEntry>,
+    parent_entries: Vec<FileEntry>,
+    list_state: ratatui::widgets::ListState,
+    search_query: String,
+}
+
 pub struct App {
     config: AppConfig,
     key_mapper: KeyMapper,
@@ -69,6 +79,8 @@ pub struct App {
     parent_entries: Vec<FileEntry>,
     list_state: ratatui::widgets::ListState,
     list_inner: ratatui::layout::Rect,
+    tabs: Vec<TabState>,
+    active_tab: usize,
 
     preview_content: PreviewContent,
     preview_protocol: Option<StatefulProtocol>,
@@ -127,6 +139,8 @@ impl App {
             parent_entries: Vec::new(),
             list_state: ratatui::widgets::ListState::default(),
             list_inner: ratatui::layout::Rect::default(),
+            tabs: Vec::new(),
+            active_tab: 0,
             preview_content: PreviewContent::none(),
             preview_protocol: None,
             git_statuses: Vec::new(),
@@ -150,6 +164,7 @@ impl App {
         };
 
         app.refresh().await?;
+        app.tabs.push(app.snapshot());
         Ok(app)
     }
 
@@ -339,6 +354,68 @@ impl App {
         }
     }
 
+    fn snapshot(&self) -> TabState {
+        TabState {
+            current_path: self.current_path.clone(),
+            entries: self.entries.clone(),
+            display: self.display.clone(),
+            parent_entries: self.parent_entries.clone(),
+            list_state: self.list_state.clone(),
+            search_query: self.search_query.clone(),
+        }
+    }
+
+    fn save_active_tab(&mut self) {
+        let snapshot = self.snapshot();
+        if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+            *tab = snapshot;
+        }
+    }
+
+    fn restore_active_tab(&mut self) {
+        if let Some(tab) = self.tabs.get(self.active_tab).cloned() {
+            self.current_path = tab.current_path;
+            self.entries = tab.entries;
+            self.display = tab.display;
+            self.parent_entries = tab.parent_entries;
+            self.list_state = tab.list_state;
+            self.search_query = tab.search_query;
+        }
+    }
+
+    async fn switch_tab(&mut self, index: usize) -> Result<()> {
+        if index >= self.tabs.len() || index == self.active_tab {
+            return Ok(());
+        }
+        self.save_active_tab();
+        self.active_tab = index;
+        self.restore_active_tab();
+        self.refresh().await?;
+        Ok(())
+    }
+
+    async fn new_tab(&mut self) {
+        self.save_active_tab();
+        let snapshot = self.snapshot();
+        self.tabs.push(snapshot);
+        self.active_tab = self.tabs.len() - 1;
+    }
+
+    async fn close_tab(&mut self) -> Result<()> {
+        if self.tabs.len() <= 1 {
+            self.notice = Some("Cannot close the last tab".to_string());
+            return Ok(());
+        }
+
+        self.tabs.remove(self.active_tab);
+        if self.active_tab >= self.tabs.len() {
+            self.active_tab = self.tabs.len() - 1;
+        }
+        self.restore_active_tab();
+        self.refresh().await?;
+        Ok(())
+    }
+
     fn selected_entry(&self) -> Option<&FileEntry> {
         self.list_state
             .selected()
@@ -360,9 +437,33 @@ impl App {
             return;
         }
 
-        let areas = crate::ui::layout(area, self.show_preview, self.config.ui.show_parent);
+        let show_tabs = self.tabs.len() > 1;
+        let areas = crate::ui::layout(
+            area,
+            self.show_preview,
+            self.config.ui.show_parent,
+            show_tabs,
+        );
 
         let current_title = dir_title(&self.current_path);
+
+        // Tab bar (only when there is more than one tab)
+        if let Some(tabs_area) = areas.tabs {
+            let tabs: Vec<(String, bool)> = self
+                .tabs
+                .iter()
+                .enumerate()
+                .map(|(index, tab)| {
+                    let path = if index == self.active_tab {
+                        &self.current_path
+                    } else {
+                        &tab.current_path
+                    };
+                    (dir_title(path), index == self.active_tab)
+                })
+                .collect();
+            crate::ui::top_bar::render_tabs(frame, tabs_area, &tabs, colors);
+        }
 
         // Breadcrumb bar
         crate::ui::top_bar::render(
@@ -645,6 +746,13 @@ impl App {
                 self.update_preview().await;
                 return Ok(());
             }
+            KeyCode::Char(c @ '1'..='9') => {
+                let index = (c as u8 - b'1') as usize;
+                if index < self.tabs.len() {
+                    self.switch_tab(index).await?;
+                    return Ok(());
+                }
+            }
             _ => {}
         }
 
@@ -717,6 +825,24 @@ impl App {
                 Action::ReverseSort => {
                     self.reverse_sort = !self.reverse_sort;
                     self.refresh().await?;
+                }
+                Action::NewTab => self.new_tab().await,
+                Action::CloseTab => self.close_tab().await?,
+                Action::NextTab => {
+                    if self.tabs.len() > 1 {
+                        let next = (self.active_tab + 1) % self.tabs.len();
+                        self.switch_tab(next).await?;
+                    }
+                }
+                Action::PrevTab => {
+                    if self.tabs.len() > 1 {
+                        let prev = if self.active_tab == 0 {
+                            self.tabs.len() - 1
+                        } else {
+                            self.active_tab - 1
+                        };
+                        self.switch_tab(prev).await?;
+                    }
                 }
             }
         }

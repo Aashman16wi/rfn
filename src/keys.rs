@@ -28,6 +28,10 @@ pub enum Action {
     GotoHome,
     SortCycle,
     ReverseSort,
+    NewTab,
+    CloseTab,
+    NextTab,
+    PrevTab,
 }
 
 pub struct KeyMapper {
@@ -62,6 +66,10 @@ impl KeyMapper {
         Self::add_keys(&mut map, &config.goto_home, Action::GotoHome);
         Self::add_keys(&mut map, &config.sort, Action::SortCycle);
         Self::add_keys(&mut map, &config.reverse_sort, Action::ReverseSort);
+        Self::add_keys(&mut map, &config.tab_new, Action::NewTab);
+        Self::add_keys(&mut map, &config.tab_close, Action::CloseTab);
+        Self::add_keys(&mut map, &config.tab_next, Action::NextTab);
+        Self::add_keys(&mut map, &config.tab_prev, Action::PrevTab);
 
         Self { map }
     }
@@ -105,6 +113,7 @@ fn parse_key(s: &str) -> Option<(KeyCode, KeyModifiers)> {
         "delete" | "del" => Some(KeyCode::Delete),
         "esc" | "escape" => Some(KeyCode::Esc),
         "tab" => Some(KeyCode::Tab),
+        "backtab" => Some(KeyCode::BackTab),
         "space" => Some(KeyCode::Char(' ')),
         "home" => Some(KeyCode::Home),
         "end" => Some(KeyCode::End),
