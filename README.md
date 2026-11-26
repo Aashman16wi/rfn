@@ -56,7 +56,7 @@ in the config.
 ## Build and run
 
 ```bash
-git clone <this repository>
+git clone https://github.com/Aashman16wi/rfn
 cd rfn
 cargo build --release
 ./target/release/rfn
