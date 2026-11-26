@@ -32,6 +32,9 @@ pub enum Action {
     CloseTab,
     NextTab,
     PrevTab,
+    ToggleVisual,
+    ToggleMark,
+    BulkRename,
 }
 
 pub struct KeyMapper {
@@ -70,6 +73,9 @@ impl KeyMapper {
         Self::add_keys(&mut map, &config.tab_close, Action::CloseTab);
         Self::add_keys(&mut map, &config.tab_next, Action::NextTab);
         Self::add_keys(&mut map, &config.tab_prev, Action::PrevTab);
+        Self::add_keys(&mut map, &config.visual, Action::ToggleVisual);
+        Self::add_keys(&mut map, &config.mark, Action::ToggleMark);
+        Self::add_keys(&mut map, &config.bulk_rename, Action::BulkRename);
 
         Self { map }
     }

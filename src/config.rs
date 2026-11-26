@@ -125,6 +125,9 @@ pub struct KeyConfig {
     pub tab_close: Vec<String>,
     pub tab_next: Vec<String>,
     pub tab_prev: Vec<String>,
+    pub visual: Vec<String>,
+    pub mark: Vec<String>,
+    pub bulk_rename: Vec<String>,
 }
 
 impl Default for AppConfig {
@@ -240,6 +243,9 @@ impl Default for KeyConfig {
             tab_close: vec!["w".into()],
             tab_next: vec!["tab".into()],
             tab_prev: vec!["backtab".into()],
+            visual: vec!["v".into()],
+            mark: vec!["space".into()],
+            bulk_rename: vec!["b".into()],
         }
     }
 }
@@ -308,7 +314,10 @@ impl AppConfig {
             .set_default("keys.tab_new", vec!["t"])?
             .set_default("keys.tab_close", vec!["w"])?
             .set_default("keys.tab_next", vec!["tab"])?
-            .set_default("keys.tab_prev", vec!["backtab"])?;
+            .set_default("keys.tab_prev", vec!["backtab"])?
+            .set_default("keys.visual", vec!["v"])?
+            .set_default("keys.mark", vec!["space"])?
+            .set_default("keys.bulk_rename", vec!["b"])?;
 
         if let Some(config_dir) = config_dir() {
             let config_path = config_dir.join("rfn").join("config.toml");

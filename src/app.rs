@@ -8,7 +8,11 @@ use crate::ui::file_list::{
 };
 use crate::ui::help::render as render_help;
 use anyhow::Result;
-use crossterm::event::{Event, KeyEventKind};
+use crossterm::event::{DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind};
+use crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+};
+use crossterm::execute;
 use ratatui::{
     backend::CrosstermBackend,
     Terminal,
@@ -107,6 +111,7 @@ pub struct App {
 
     help_visible: bool,
     notice: Option<String>,
+    pending_bulk_rename: bool,
 
     should_quit: bool,
     last_tick: std::time::Instant,
@@ -162,6 +167,7 @@ impl App {
             reverse_sort,
             help_visible: false,
             notice: None,
+            pending_bulk_rename: false,
             should_quit: false,
             last_tick: std::time::Instant::now(),
         };
@@ -185,6 +191,10 @@ impl App {
                 event = self.read_event() => {
                     if let Some(event) = event? {
                         self.handle_event(event).await?;
+                        if self.pending_bulk_rename {
+                            self.pending_bulk_rename = false;
+                            self.bulk_rename(terminal).await?;
+                        }
                         terminal.draw(|f| self.render(f))?;
                     }
                 }
@@ -763,23 +773,6 @@ impl App {
             }
         }
 
-        match key.code {
-            KeyCode::Char('v') => {
-                if self.mode == AppMode::Visual {
-                    self.mode = AppMode::Normal;
-                } else {
-                    self.mode = AppMode::Visual;
-                    self.mark_current();
-                }
-                return Ok(());
-            }
-            KeyCode::Char(' ') => {
-                self.toggle_mark();
-                return Ok(());
-            }
-            _ => {}
-        }
-
         // Vim-style jump keys that do not need a config entry.
         let page = page_size();
         if key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -941,6 +934,16 @@ impl App {
                         self.switch_tab(prev).await?;
                     }
                 }
+                Action::ToggleVisual => {
+                    if self.mode == AppMode::Visual {
+                        self.mode = AppMode::Normal;
+                    } else {
+                        self.mode = AppMode::Visual;
+                        self.mark_current();
+                    }
+                }
+                Action::ToggleMark => self.toggle_mark(),
+                Action::BulkRename => self.pending_bulk_rename = true,
             }
         }
         Ok(())
@@ -1291,6 +1294,183 @@ impl App {
             self.clipboard_paths.clear();
             self.marked.clear();
         }
+        self.refresh().await?;
+        Ok(())
+    }
+
+    /// Hand every marked file name to $EDITOR, then apply the edited lines as
+    /// renames. The terminal is restored to the shell while the editor runs.
+    async fn bulk_rename(
+        &mut self,
+        terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    ) -> Result<()> {
+        let paths = self.target_paths();
+        if paths.is_empty() {
+            return Ok(());
+        }
+
+        let mut names = Vec::with_capacity(paths.len());
+        for path in &paths {
+            match path.file_name().and_then(|name| name.to_str()) {
+                Some(name) if !name.contains('\n') => names.push(name.to_string()),
+                _ => {
+                    self.notice = Some("Bulk rename: unsupported file name".to_string());
+                    return Ok(());
+                }
+            }
+        }
+
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_millis())
+            .unwrap_or(0);
+        let temp_path = std::env::temp_dir().join(format!(
+            "rfn-rename-{}-{stamp}.txt",
+            std::process::id()
+        ));
+
+        if let Err(error) = tokio::fs::write(&temp_path, format!("{}\n", names.join("\n"))).await
+        {
+            self.notice = Some(format!("Bulk rename: {error}"));
+            return Ok(());
+        }
+
+        disable_raw_mode()?;
+        execute!(
+            terminal.backend_mut(),
+            LeaveAlternateScreen,
+            DisableMouseCapture
+        )?;
+        terminal.show_cursor()?;
+
+        let editor = std::env::var("VISUAL")
+            .or_else(|_| std::env::var("EDITOR"))
+            .unwrap_or_else(|_| "vi".to_string());
+        let status = tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("exec {editor} \"$1\""))
+            .arg("sh")
+            .arg(&temp_path)
+            .status()
+            .await;
+
+        enable_raw_mode()?;
+        execute!(
+            terminal.backend_mut(),
+            EnterAlternateScreen,
+            EnableMouseCapture
+        )?;
+        terminal.clear()?;
+
+        let status = match status {
+            Ok(status) => status,
+            Err(error) => {
+                let _ = tokio::fs::remove_file(&temp_path).await;
+                self.notice = Some(format!("Bulk rename: could not start editor: {error}"));
+                return Ok(());
+            }
+        };
+
+        if !status.success() {
+            let _ = tokio::fs::remove_file(&temp_path).await;
+            self.notice = Some(format!("Bulk rename: editor exited with {status}"));
+            return Ok(());
+        }
+
+        let edited = match tokio::fs::read_to_string(&temp_path).await {
+            Ok(text) => text,
+            Err(error) => {
+                self.notice = Some(format!("Bulk rename: {error}"));
+                return Ok(());
+            }
+        };
+        let _ = tokio::fs::remove_file(&temp_path).await;
+
+        let new_names: Vec<&str> = edited.lines().collect();
+        if new_names.len() != paths.len() {
+            self.notice = Some(format!(
+                "Bulk rename: expected {} lines, got {}",
+                paths.len(),
+                new_names.len()
+            ));
+            return Ok(());
+        }
+
+        for name in &new_names {
+            if name.is_empty() || *name == "." || *name == ".." || name.contains('/') {
+                self.notice = Some(format!("Bulk rename: invalid name \"{name}\""));
+                return Ok(());
+            }
+        }
+
+        let mut finals = HashSet::new();
+        for name in &new_names {
+            if !finals.insert(*name) {
+                self.notice = Some(format!("Bulk rename: duplicate name \"{name}\""));
+                return Ok(());
+            }
+        }
+
+        let sources: HashSet<&Path> = paths.iter().map(PathBuf::as_path).collect();
+        let mut changes: Vec<(PathBuf, PathBuf)> = Vec::new();
+        for (source, new_name) in paths.iter().zip(&new_names) {
+            let current_name = source.file_name().and_then(|name| name.to_str());
+            if current_name == Some(*new_name) {
+                continue;
+            }
+            let destination = source.with_file_name(new_name);
+            if destination.exists() && !sources.contains(destination.as_path()) {
+                self.notice = Some(format!("Bulk rename: \"{new_name}\" already exists"));
+                return Ok(());
+            }
+            changes.push((source.clone(), destination));
+        }
+
+        if changes.is_empty() {
+            self.notice = Some("Bulk rename: no names changed".to_string());
+            return Ok(());
+        }
+
+        // Stage every source under a temporary name first so swaps and
+        // rotations (a -> b, b -> a) do not collide.
+        let mut staged: Vec<(PathBuf, PathBuf, PathBuf)> = Vec::new();
+        for (index, (source, destination)) in changes.iter().enumerate() {
+            let temporary =
+                source.with_file_name(format!(".rfn-rename-{}-{index}", std::process::id()));
+            if let Err(error) = tokio::fs::rename(source, &temporary).await {
+                for (temporary, source, _) in staged.iter().rev() {
+                    let _ = tokio::fs::rename(temporary, source).await;
+                }
+                self.notice = Some(format!("Bulk rename failed: {error}"));
+                self.refresh().await?;
+                return Ok(());
+            }
+            staged.push((temporary, source.clone(), destination.clone()));
+        }
+
+        let mut failure = None;
+        for (index, (temporary, source, destination)) in staged.iter().enumerate() {
+            if let Err(error) = tokio::fs::rename(temporary, destination).await {
+                let _ = tokio::fs::rename(temporary, source).await;
+                for (other_index, (temporary, source, destination)) in
+                    staged.iter().enumerate().rev()
+                {
+                    if other_index < index {
+                        let _ = tokio::fs::rename(destination, source).await;
+                    } else if other_index > index {
+                        let _ = tokio::fs::rename(temporary, source).await;
+                    }
+                }
+                failure = Some(error);
+                break;
+            }
+        }
+
+        if let Some(error) = failure {
+            self.notice = Some(format!("Bulk rename failed: {error}"));
+        }
+
+        self.clear_marks();
         self.refresh().await?;
         Ok(())
     }

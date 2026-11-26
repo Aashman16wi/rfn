@@ -30,7 +30,11 @@ crates.io and there are no prebuilt binaries — build it from source.
   - audio/video metadata via `ffprobe`
   - archive contents for zip, tar, tar.gz, tar.xz, tar.bz2 and tar.zst
 - Git status markers per file.
-- Copy, cut, paste, rename, create, delete.
+- Tabs, each with its own directory, selection and search.
+- Visual selection for copying, cutting and deleting several files at once.
+- Bulk rename through `$EDITOR`.
+- Copy, cut, paste (asks before overwriting), rename, create, delete.
+- Delete moves files to the system trash by default.
 - Hidden-file toggle and sort by name/size/time/extension.
 - Tokyo Night-ish colors, Nerd Font icons.
 
@@ -89,6 +93,10 @@ show_icons = true
 show_hidden = false
 show_parent = true
 
+[behavior]
+confirm_delete = true
+use_trash = true
+
 [preview]
 enabled = true
 show_images = true
@@ -115,8 +123,15 @@ sort = ["s"]
 | `Ctrl+u` / `Ctrl+d` | Page up / down |
 | `n` / `N` | New file / directory |
 | `r` | Rename |
-| `d` / `Delete` | Delete (asks first) |
+| `d` / `Delete` | Delete (asks first; moves to trash by default) |
 | `y` / `x` / `p` | Copy / cut / paste |
+| `v` | Start visual selection |
+| `Space` | Mark / unmark a file |
+| `Esc` | Clear selection or search |
+| `b` | Bulk rename marked files in `$EDITOR` |
+| `t` / `w` | New tab / close tab |
+| `Tab` / `Shift+Tab` | Next / previous tab |
+| `1` – `9` | Jump to tab |
 | `.` | Toggle hidden files |
 | `P` | Toggle preview |
 | `g` | Toggle git status |
@@ -130,13 +145,14 @@ Mouse wheel scrolls and left click selects.
 
 ## Limitations
 
-- No tabs, visual selection, bulk rename, or background task queue yet.
-- Delete is permanent; there is no trash.
-- Copy/paste does not ask before overwriting an existing file.
-- The preview cache lives in `/tmp/rfn-previews` and is not cleaned up
-  automatically.
+- No background task queue: large copies block the UI until they finish.
+- Directory conflicts during paste are replaced, not merged.
+- There is no trash browser for restoring deleted files.
+- No preview scrolling, image zoom, bookmarks or "open with" menu.
+- Tabs are not restored across restarts.
 - The UI is designed for terminals at least 100 columns wide; narrower
   terminals hide the parent column first.
+- Only Linux is tested.
 
 ## License
 

@@ -55,12 +55,22 @@ pub fn render(frame: &mut Frame, area: Rect, _keys: &KeyConfig, colors: &ColorCo
             ],
         ),
         (
+            "Tabs",
+            vec![
+                ("t", "New tab"),
+                ("w", "Close tab"),
+                ("Tab / Shift+Tab", "Next / previous tab"),
+                ("1 – 9", "Jump to tab"),
+            ],
+        ),
+        (
             "File operations",
             vec![
                 ("n", "New file"),
                 ("N", "New directory"),
                 ("r", "Rename"),
-                ("d / Delete", "Delete"),
+                ("b", "Bulk rename in $EDITOR"),
+                ("d / Delete", "Delete (to trash)"),
                 ("y", "Copy (yank)"),
                 ("x", "Cut"),
                 ("p", "Paste"),
@@ -69,6 +79,14 @@ pub fn render(frame: &mut Frame, area: Rect, _keys: &KeyConfig, colors: &ColorCo
     ];
 
     let right_sections = vec![
+        (
+            "Selection",
+            vec![
+                ("v", "Visual select"),
+                ("Space", "Mark / unmark file"),
+                ("Esc", "Clear selection"),
+            ],
+        ),
         (
             "View",
             vec![
@@ -86,7 +104,6 @@ pub fn render(frame: &mut Frame, area: Rect, _keys: &KeyConfig, colors: &ColorCo
             "Other",
             vec![
                 ("/", "Search"),
-                ("Esc", "Clear search"),
                 ("?", "Toggle help"),
                 ("q / Ctrl+c", "Quit"),
             ],
