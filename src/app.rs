@@ -109,6 +109,8 @@ pub struct App {
 
     clipboard: ClipboardOp,
     clipboard_paths: Vec<PathBuf>,
+    queue: Vec<crate::state::QueueItem>,
+    queue_notify: Option<String>,
     marked: HashSet<PathBuf>,
 
     show_hidden: bool,
@@ -174,6 +176,8 @@ impl App {
             new_name_buffer: String::new(),
             clipboard: ClipboardOp::None,
             clipboard_paths: Vec::new(),
+            queue: Vec::new(),
+            queue_notify: None,
             marked: HashSet::new(),
             show_hidden,
             show_preview,
@@ -331,7 +335,7 @@ impl App {
     }
 
     async fn refresh_trash(&mut self) -> Result<()> {
-        use trash::os_limited::{list, restore_all};
+        use trash::os_limited::list;
         self.trash_entries.clear();
         if let Ok(items) = list() {
             for item in items {
@@ -1321,8 +1325,14 @@ impl App {
     fn copy_selected(&mut self) {
         let paths = self.target_paths();
         if !paths.is_empty() {
-            self.clipboard = ClipboardOp::Copy;
-            self.clipboard_paths = paths;
+            for path in &paths {
+                self.queue.push(QueueItem {
+                    op: "copy".to_string(),
+                    src: path.clone(),
+                    dst: self.current_path.join(path.file_name().unwrap()),
+                });
+            }
+            self.queue_notify = Some(format!("{} item(s) added to copy queue", paths.len()));
         }
         self.clear_marks();
     }
@@ -1330,8 +1340,14 @@ impl App {
     fn cut_selected(&mut self) {
         let paths = self.target_paths();
         if !paths.is_empty() {
-            self.clipboard = ClipboardOp::Cut;
-            self.clipboard_paths = paths;
+            for path in &paths {
+                self.queue.push(QueueItem {
+                    op: "move".to_string(),
+                    src: path.clone(),
+                    dst: self.current_path.join(path.file_name().unwrap()),
+                });
+            }
+            self.queue_notify = Some(format!("{} item(s) added to move queue", paths.len()));
         }
         self.clear_marks();
     }
@@ -1605,7 +1621,7 @@ impl App {
     }
 
     async fn handle_trash(&mut self, key: crossterm::event::KeyEvent) -> Result<()> {
-        use crossterm::event::{KeyCode, KeyModifiers};
+        use crossterm::event::KeyCode;
         use trash::os_limited::{list, restore_all};
 
         if key.code == KeyCode::Esc {
@@ -1635,7 +1651,7 @@ impl App {
             }
             KeyCode::Char('r') => {
                 if let Some(idx) = self.trash_list_state.selected() {
-                    if let Some(entry) = self.trash_entries.get(idx) {
+                    if let Some(_entry) = self.trash_entries.get(idx) {
                         // Need to get the TrashItem from the list to restore
                         if let Ok(items) = list() {
                             if let Some(trash_item) = items.get(idx) {
@@ -1668,7 +1684,7 @@ impl App {
     }
 
     async fn handle_open_with(&mut self, key: crossterm::event::KeyEvent) -> Result<()> {
-        use crossterm::event::{KeyCode, KeyModifiers};
+        use crossterm::event::KeyCode;
 
         if key.code == KeyCode::Esc {
             self.mode = AppMode::Normal;

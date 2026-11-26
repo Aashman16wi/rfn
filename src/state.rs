@@ -6,6 +6,53 @@ pub struct SessionState {
     pub bookmarks: Vec<PathBuf>,
 }
 
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QueueItem {
+    pub op: String,  // "copy" or "move"
+    pub src: PathBuf,
+    pub dst: PathBuf,
+}
+
+pub fn queue_dir() -> PathBuf {
+    state_dir().join("queue")
+}
+
+fn queue_file() -> PathBuf {
+    queue_dir().join("queue")
+}
+
+pub fn load_queue() -> Vec<QueueItem> {
+    let text = std::fs::read_to_string(queue_file()).ok()?;
+    let mut items = Vec::new();
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("item=") {
+            let parts: Vec<&str> = rest.splitn(3, '|').collect();
+            if parts.len() == 3 {
+                items.push(QueueItem {
+                    op: parts[0].to_string(),
+                    src: PathBuf::from(parts[1]),
+                    dst: PathBuf::from(parts[2]),
+                });
+            }
+        }
+    }
+    items
+}
+
+pub fn save_queue(items: &[QueueItem]) {
+    let dir = queue_dir();
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let mut text = String::new();
+    for item in items {
+        text.push_str(&format!("item={}|{}|{}
+", item.op, item.src.display(), item.dst.display()));
+    }
+    let _ = std::fs::write(queue_file(), text);
+}
+
 pub fn state_dir() -> PathBuf {
     dirs::state_dir()
         .or_else(|| dirs::home_dir().map(|home| home.join(".local/state")))
@@ -47,7 +94,7 @@ pub fn load() -> Option<SessionState> {
 }
 
 
-pub fn trash_dir() -> PathBuf {
+pub fn _trash_dir() -> PathBuf {
     dirs::data_local_dir()
         .or_else(|| dirs::home_dir().map(|home| home.join(".local/share")))
         .unwrap_or_else(|| std::env::temp_dir())
@@ -81,3 +128,6 @@ pub fn save(tabs: &[&Path], active: usize, bookmarks: &[PathBuf]) {
     }
     let _ = std::fs::write(dir.join("session"), text);
 }
+
+
+#[derive(Debug, Clone, PartialEq, Eq)]
