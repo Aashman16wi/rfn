@@ -35,6 +35,15 @@ pub enum Action {
     ToggleVisual,
     ToggleMark,
     BulkRename,
+    PreviewScrollUp,
+    PreviewScrollDown,
+    PreviewZoomIn,
+    PreviewZoomOut,
+    PreviewReset,
+    BookmarkAdd,
+    BookmarkJump,
+    OpenTrash,
+    OpenWith,
 }
 
 pub struct KeyMapper {
@@ -76,6 +85,15 @@ impl KeyMapper {
         Self::add_keys(&mut map, &config.visual, Action::ToggleVisual);
         Self::add_keys(&mut map, &config.mark, Action::ToggleMark);
         Self::add_keys(&mut map, &config.bulk_rename, Action::BulkRename);
+        Self::add_keys(&mut map, &config.preview_scroll_up, Action::PreviewScrollUp);
+        Self::add_keys(&mut map, &config.preview_scroll_down, Action::PreviewScrollDown);
+        Self::add_keys(&mut map, &config.preview_zoom_in, Action::PreviewZoomIn);
+        Self::add_keys(&mut map, &config.preview_zoom_out, Action::PreviewZoomOut);
+        Self::add_keys(&mut map, &config.preview_reset, Action::PreviewReset);
+        Self::add_keys(&mut map, &config.bookmark_add, Action::BookmarkAdd);
+        Self::add_keys(&mut map, &config.bookmark_jump, Action::BookmarkJump);
+        Self::add_keys(&mut map, &config.trash, Action::OpenTrash);
+        Self::add_keys(&mut map, &config.open_with, Action::OpenWith);
 
         Self { map }
     }

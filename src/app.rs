@@ -71,6 +71,8 @@ struct TabState {
     parent_entries: Vec<FileEntry>,
     list_state: ratatui::widgets::ListState,
     search_query: String,
+    preview_scroll: usize,
+    preview_zoom: f32,
 }
 
 pub struct App {
@@ -87,9 +89,14 @@ pub struct App {
     tabs: Vec<TabState>,
     active_tab: usize,
     bookmarks: Vec<PathBuf>,
+    trash_entries: Vec<FileEntry>,
+    trash_list_state: ratatui::widgets::ListState,
+    open_with_buffer: String,
 
     preview_content: PreviewContent,
     preview_protocol: Option<StatefulProtocol>,
+    preview_scroll: usize,
+    preview_zoom: f32,
 
     git_statuses: Vec<(PathBuf, crate::types::GitStatus)>,
     git_root: Option<PathBuf>,
@@ -151,8 +158,13 @@ impl App {
             tabs: Vec::new(),
             active_tab: 0,
             bookmarks: Vec::new(),
+            trash_entries: Vec::new(),
+            trash_list_state: ratatui::widgets::ListState::default(),
+            open_with_buffer: String::new(),
             preview_content: PreviewContent::none(),
             preview_protocol: None,
+            preview_scroll: 0,
+            preview_zoom: 1.0,
             git_statuses: Vec::new(),
             git_root: None,
             mode: AppMode::Normal,
@@ -281,6 +293,10 @@ impl App {
     }
 
     async fn refresh(&mut self) -> Result<()> {
+        if self.mode == AppMode::TrashBrowser {
+            self.refresh_trash().await?;
+            return Ok(());
+        }
         match read_dir(&self.current_path, self.show_hidden).await {
             Ok(entries) => self.entries = entries,
             Err(error) => {
@@ -311,6 +327,36 @@ impl App {
         self.rebuild_display();
         self.update_preview().await;
 
+        Ok(())
+    }
+
+    async fn refresh_trash(&mut self) -> Result<()> {
+        use trash::os_limited::{list, restore_all};
+        self.trash_entries.clear();
+        if let Ok(items) = list() {
+            for item in items {
+                let original_path = item.original_path();
+                if let Ok(meta) = std::fs::metadata(&original_path) {
+                    let name = original_path.file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("unknown")
+                        .to_string();
+                    self.trash_entries.push(FileEntry {
+                        path: original_path,
+                        name,
+                        file_type: if meta.is_dir() { crate::types::FileType::Directory } else { crate::types::FileType::File },
+                        size: meta.len(),
+                        modified: meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH),
+                        permissions: 0,
+                        git_status: crate::types::GitStatus::Unmodified,
+                        mime_type: None,
+                        is_hidden: false,
+                    });
+                }
+            }
+        }
+        sort_entries(&mut self.trash_entries, SortBy::Modified, false, true);
+        self.trash_list_state.select(Some(0));
         Ok(())
     }
 
@@ -414,6 +460,8 @@ impl App {
             parent_entries: self.parent_entries.clone(),
             list_state: self.list_state.clone(),
             search_query: self.search_query.clone(),
+            preview_scroll: self.preview_scroll,
+            preview_zoom: self.preview_zoom,
         }
     }
 
@@ -432,6 +480,8 @@ impl App {
             self.parent_entries = tab.parent_entries;
             self.list_state = tab.list_state;
             self.search_query = tab.search_query;
+            self.preview_scroll = tab.preview_scroll;
+            self.preview_zoom = tab.preview_zoom;
         }
     }
 
@@ -610,6 +660,8 @@ impl App {
                 &self.preview_content,
                 self.preview_protocol.as_mut(),
                 colors,
+                self.preview_scroll,
+                self.preview_zoom,
             );
         }
 
@@ -642,7 +694,10 @@ impl App {
 
         // Status bar
         let status_area = areas.status;
-        let selected_entry = self.selected_entry();
+        let selected_entry = match self.mode {
+            AppMode::TrashBrowser => self.trash_list_state.selected().and_then(|i| self.trash_entries.get(i)),
+            _ => self.selected_entry(),
+        };
         crate::ui::status_bar::render(
             frame,
             status_area,
@@ -752,6 +807,8 @@ impl App {
                     AppMode::ConfirmQuit => self.handle_confirm_quit(key).await?,
                     AppMode::ConfirmOverwrite => self.handle_confirm_overwrite(key).await?,
                     AppMode::Visual => self.handle_normal(key).await?,
+                    AppMode::TrashBrowser => self.handle_trash(key).await?,
+                    AppMode::OpenWith => self.handle_open_with(key).await?,
                 }
             }
             Event::Mouse(mouse) => {
@@ -983,6 +1040,38 @@ impl App {
                 }
                 Action::ToggleMark => self.toggle_mark(),
                 Action::BulkRename => self.pending_bulk_rename = true,
+                Action::PreviewScrollUp => {
+                    if self.preview_scroll > 0 {
+                        self.preview_scroll = self.preview_scroll.saturating_sub(5);
+                    }
+                }
+                Action::PreviewScrollDown => {
+                    self.preview_scroll += 5;
+                }
+                Action::PreviewZoomIn => {
+                    self.preview_zoom = (self.preview_zoom * 1.2).min(4.0);
+                }
+                Action::PreviewZoomOut => {
+                    self.preview_zoom = (self.preview_zoom / 1.2).max(0.25);
+                }
+                Action::PreviewReset => {
+                    self.preview_scroll = 0;
+                    self.preview_zoom = 1.0;
+                }
+                Action::BookmarkAdd => {
+                    if !self.bookmarks.contains(&self.current_path) {
+                        self.bookmarks.push(self.current_path.clone());
+                        self.notice = Some("Bookmark added".to_string());
+                    }
+                }
+                Action::BookmarkJump => {
+                    if !self.bookmarks.is_empty() {
+                        self.current_path = self.bookmarks[0].clone();
+                        self.refresh().await?;
+                    }
+                }
+                Action::OpenTrash => self.mode = AppMode::TrashBrowser,
+                Action::OpenWith => self.mode = AppMode::OpenWith,
             }
         }
         Ok(())
@@ -1190,7 +1279,8 @@ impl App {
     }
 
     fn start_rename(&mut self) {
-        if let Some(entry) = self.selected_entry() {
+        let entry = self.selected_entry().cloned();
+                if let Some(entry) = entry {
             self.rename_buffer = entry.name.clone();
             self.mode = AppMode::Rename;
         }
@@ -1511,6 +1601,121 @@ impl App {
 
         self.clear_marks();
         self.refresh().await?;
+        Ok(())
+    }
+
+    async fn handle_trash(&mut self, key: crossterm::event::KeyEvent) -> Result<()> {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        use trash::os_limited::{list, restore_all};
+
+        if key.code == KeyCode::Esc {
+            self.mode = AppMode::Normal;
+            self.trash_entries.clear();
+            return Ok(());
+        }
+
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                previous(&mut self.trash_list_state, self.trash_entries.len());
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                next(&mut self.trash_list_state, self.trash_entries.len());
+            }
+            KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right => {
+                if let Some(idx) = self.trash_list_state.selected() {
+                    if let Some(entry) = self.trash_entries.get(idx) {
+                        if entry.path.is_dir() {
+                            self.current_path = entry.path.clone();
+                            self.mode = AppMode::Normal;
+                            self.trash_entries.clear();
+                            self.refresh().await?;
+                        }
+                    }
+                }
+            }
+            KeyCode::Char('r') => {
+                if let Some(idx) = self.trash_list_state.selected() {
+                    if let Some(entry) = self.trash_entries.get(idx) {
+                        // Need to get the TrashItem from the list to restore
+                        if let Ok(items) = list() {
+                            if let Some(trash_item) = items.get(idx) {
+                                if let Err(e) = restore_all(std::iter::once(trash_item.clone())) {
+                                    self.notice = Some(format!("Restore failed: {e}"));
+                                } else {
+                                    self.notice = Some("Restored".to_string());
+                                    self.refresh_trash().await?;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            KeyCode::Delete | KeyCode::Char('d') => {
+                if let Some(idx) = self.trash_list_state.selected() {
+                    if let Some(entry) = self.trash_entries.get(idx) {
+                        if entry.path.is_dir() {
+                            let _ = tokio::fs::remove_dir_all(&entry.path).await;
+                        } else {
+                            let _ = tokio::fs::remove_file(&entry.path).await;
+                        }
+                        self.refresh_trash().await?;
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    async fn handle_open_with(&mut self, key: crossterm::event::KeyEvent) -> Result<()> {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        if key.code == KeyCode::Esc {
+            self.mode = AppMode::Normal;
+            self.open_with_buffer.clear();
+            return Ok(());
+        }
+
+        match key.code {
+            KeyCode::Char(c) => {
+                self.open_with_buffer.push(c);
+            }
+            KeyCode::Backspace => {
+                self.open_with_buffer.pop();
+            }
+            KeyCode::Enter => {
+                let entry = self.selected_entry().cloned();
+                if let Some(entry) = entry {
+                    let cmd = self.open_with_buffer.clone();
+                    self.open_with_buffer.clear();
+                    self.mode = AppMode::Normal;
+                    disable_raw_mode()?;
+                    execute!(
+                        std::io::stdout(),
+                        LeaveAlternateScreen,
+                        DisableMouseCapture
+                    )?;
+                    let status = tokio::process::Command::new("sh")
+                        .arg("-c")
+                        .arg(format!("exec {} \"{}\"", cmd, entry.path.display()))
+                        .status()
+                        .await;
+                    enable_raw_mode()?;
+                    execute!(
+                        std::io::stdout(),
+                        EnterAlternateScreen,
+                        EnableMouseCapture
+                    )?;
+                    if let Err(e) = status {
+                        self.notice = Some(format!("Open with failed: {e}"));
+                    }
+                } else {
+                    self.open_with_buffer.clear();
+                    self.mode = AppMode::Normal;
+                }
+            }
+            _ => {}
+        }
         Ok(())
     }
 

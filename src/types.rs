@@ -121,6 +121,8 @@ pub enum AppMode {
     ConfirmQuit,
     ConfirmOverwrite,
     Visual,
+    TrashBrowser,
+    OpenWith,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

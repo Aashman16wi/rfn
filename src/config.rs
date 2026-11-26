@@ -130,6 +130,15 @@ pub struct KeyConfig {
     pub visual: Vec<String>,
     pub mark: Vec<String>,
     pub bulk_rename: Vec<String>,
+    pub preview_scroll_up: Vec<String>,
+    pub preview_scroll_down: Vec<String>,
+    pub preview_zoom_in: Vec<String>,
+    pub preview_zoom_out: Vec<String>,
+    pub preview_reset: Vec<String>,
+    pub bookmark_add: Vec<String>,
+    pub bookmark_jump: Vec<String>,
+    pub trash: Vec<String>,
+    pub open_with: Vec<String>,
 }
 
 impl Default for AppConfig {
@@ -289,6 +298,15 @@ impl Default for KeyConfig {
             visual: vec!["v".into()],
             mark: vec!["space".into()],
             bulk_rename: vec!["b".into()],
+            preview_scroll_up: vec!["K".into()],
+            preview_scroll_down: vec!["J".into()],
+            preview_zoom_in: vec!["=".into()],
+            preview_zoom_out: vec!["-".into()],
+            preview_reset: vec!["0".into()],
+            bookmark_add: vec!["m".into()],
+            bookmark_jump: vec!["M".into()],
+            trash: vec!["T".into()],
+            open_with: vec!["o".into()],
         }
     }
 }
@@ -361,7 +379,16 @@ impl AppConfig {
             .set_default("keys.tab_prev", vec!["backtab"])?
             .set_default("keys.visual", vec!["v"])?
             .set_default("keys.mark", vec!["space"])?
-            .set_default("keys.bulk_rename", vec!["b"])?;
+            .set_default("keys.bulk_rename", vec!["b"])?
+            .set_default("keys.preview_scroll_up", vec!["K"])?
+            .set_default("keys.preview_scroll_down", vec!["J"])?
+            .set_default("keys.preview_zoom_in", vec!["="])?
+            .set_default("keys.preview_zoom_out", vec!["-"])?
+            .set_default("keys.preview_reset", vec!["0"])?
+            .set_default("keys.bookmark_add", vec!["m"])?
+            .set_default("keys.bookmark_jump", vec!["M"])?
+            .set_default("keys.trash", vec!["T"])?
+            .set_default("keys.open_with", vec!["o"])?;
 
         if let Some(config_dir) = config_dir() {
             let config_path = config_dir.join("rfn").join("config.toml");

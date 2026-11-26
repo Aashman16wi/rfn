@@ -16,6 +16,8 @@ pub fn render(
     content: &PreviewContent,
     protocol: Option<&mut StatefulProtocol>,
     colors: &ColorConfig,
+    scroll: usize,
+    _zoom: f32,
 ) {
     let block = Block::default()
         .title(Line::from(Span::styled(
@@ -32,6 +34,8 @@ pub fn render(
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    let muted = parse_color(&colors.muted);
+
     if content.preview_type == PreviewType::Image {
         if let Some(protocol) = protocol {
             frame.render_stateful_widget(
@@ -43,7 +47,7 @@ pub fn render(
         }
     }
 
-    let muted = parse_color(&colors.muted);
+    // Only text previews scroll
     let text = match content.preview_type {
         PreviewType::Image => vec![Line::from(Span::styled(
             "[Image preview unavailable]",
@@ -60,6 +64,7 @@ pub fn render(
         PreviewType::Text => content
             .content
             .lines()
+            .skip(scroll)
             .map(|line| {
                 Line::from(Span::styled(
                     line.to_string(),

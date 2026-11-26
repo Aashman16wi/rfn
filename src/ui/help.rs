@@ -64,6 +64,13 @@ pub fn render(frame: &mut Frame, area: Rect, _keys: &KeyConfig, colors: &ColorCo
             ],
         ),
         (
+            "Session",
+            vec![
+                ("m", "Bookmark current directory"),
+                ("M", "Jump to bookmark"),
+            ],
+        ),
+        (
             "File operations",
             vec![
                 ("n", "New file"),
@@ -88,6 +95,14 @@ pub fn render(frame: &mut Frame, area: Rect, _keys: &KeyConfig, colors: &ColorCo
             ],
         ),
         (
+            "Preview",
+            vec![
+                ("J / K", "Scroll preview down / up"),
+                ("= / -", "Zoom in / out"),
+                ("0", "Reset preview"),
+            ],
+        ),
+        (
             "View",
             vec![
                 (".", "Toggle hidden files"),
@@ -106,6 +121,7 @@ pub fn render(frame: &mut Frame, area: Rect, _keys: &KeyConfig, colors: &ColorCo
                 ("/", "Search"),
                 ("?", "Toggle help"),
                 ("q / Ctrl+c", "Quit"),
+                ("", ""),
             ],
         ),
     ];

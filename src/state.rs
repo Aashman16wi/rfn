@@ -46,6 +46,14 @@ pub fn load() -> Option<SessionState> {
     })
 }
 
+
+pub fn trash_dir() -> PathBuf {
+    dirs::data_local_dir()
+        .or_else(|| dirs::home_dir().map(|home| home.join(".local/share")))
+        .unwrap_or_else(|| std::env::temp_dir())
+        .join("Trash")
+}
+
 pub fn save(tabs: &[&Path], active: usize, bookmarks: &[PathBuf]) {
     let mut text = format!("active={active}\n");
     for tab in tabs {
