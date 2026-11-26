@@ -52,6 +52,7 @@ async fn main() -> Result<()> {
 
     let config = AppConfig::load()?;
     let picker = crate::app::create_picker(&config);
+    crate::preview::clean_preview_cache();
 
     let start_path = std::path::PathBuf::from(&args.path);
 

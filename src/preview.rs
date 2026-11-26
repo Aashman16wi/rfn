@@ -653,3 +653,27 @@ pub fn preview_cache_dir() -> PathBuf {
     let _ = std::fs::create_dir_all(&dir);
     dir
 }
+
+/// Drop thumbnails older than a week so the cache does not grow forever.
+pub fn clean_preview_cache() {
+    use std::time::{Duration, SystemTime};
+
+    let cutoff = SystemTime::now()
+        .checked_sub(Duration::from_secs(7 * 24 * 60 * 60))
+        .unwrap_or(SystemTime::UNIX_EPOCH);
+
+    let Ok(entries) = std::fs::read_dir(preview_cache_dir()) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        let stale = entry
+            .metadata()
+            .and_then(|meta| meta.modified())
+            .map(|modified| modified < cutoff)
+            .unwrap_or(false);
+        if stale {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
