@@ -91,6 +91,7 @@ pub struct App {
     reverse_sort: bool,
 
     help_visible: bool,
+    notice: Option<String>,
 
     should_quit: bool,
     last_tick: std::time::Instant,
@@ -141,6 +142,7 @@ impl App {
             sort_by,
             reverse_sort,
             help_visible: false,
+            notice: None,
             should_quit: false,
             last_tick: std::time::Instant::now(),
         };
@@ -177,10 +179,21 @@ impl App {
     }
 
     async fn read_event(&self) -> Result<Option<Event>> {
-        if crossterm::event::poll(Duration::from_millis(50))? {
-            Ok(Some(crossterm::event::read()?))
-        } else {
-            Ok(None)
+        loop {
+            if !crossterm::event::poll(Duration::from_millis(50))? {
+                return Ok(None);
+            }
+            let event = crossterm::event::read()?;
+            // Mouse-move tracking is on so clicks work, but moves should not
+            // force a full redraw (and an image retransmit).
+            if matches!(
+                event,
+                Event::Mouse(mouse)
+                    if mouse.kind == crossterm::event::MouseEventKind::Moved
+            ) {
+                continue;
+            }
+            return Ok(Some(event));
         }
     }
 
@@ -199,7 +212,16 @@ impl App {
     }
 
     async fn refresh(&mut self) -> Result<()> {
-        self.entries = read_dir(&self.current_path, self.show_hidden).await?;
+        match read_dir(&self.current_path, self.show_hidden).await {
+            Ok(entries) => self.entries = entries,
+            Err(error) => {
+                self.notice = Some(format!(
+                    "Cannot read {}: {error}",
+                    self.current_path.display()
+                ));
+                self.entries.clear();
+            }
+        }
         sort_entries(&mut self.entries, self.sort_by, self.config.behavior.sort_dirs_first, self.reverse_sort);
 
         self.parent_entries = match self.current_path.parent() {
@@ -395,6 +417,33 @@ impl App {
             );
         }
 
+        // Transient error notice above the status bar.
+        if let Some(notice) = self.notice.clone() {
+            let notice_area = ratatui::layout::Rect::new(
+                area.x,
+                area.y + area.height.saturating_sub(2),
+                area.width,
+                1,
+            );
+            frame.render_widget(ratatui::widgets::Clear, notice_area);
+            frame.render_widget(
+                ratatui::widgets::Paragraph::new(ratatui::text::Line::from(
+                    ratatui::text::Span::styled(
+                        format!(" {notice} "),
+                        ratatui::style::Style::default()
+                            .bg(ratatui::style::Color::Rgb(247, 118, 142))
+                            .fg(ratatui::style::Color::Rgb(26, 27, 38))
+                            .add_modifier(ratatui::style::Modifier::BOLD),
+                    ),
+                ))
+                .style(
+                    ratatui::style::Style::default()
+                        .bg(ratatui::style::Color::Rgb(247, 118, 142)),
+                ),
+                notice_area,
+            );
+        }
+
         // Status bar
         let status_area = areas.status;
         let selected_entry = self.selected_entry();
@@ -460,6 +509,8 @@ impl App {
                 if key.kind != KeyEventKind::Press {
                     return Ok(());
                 }
+
+                self.notice = None;
 
                 if self.help_visible {
                     self.handle_help(key).await?;
@@ -794,9 +845,8 @@ impl App {
                 self.list_state.select(Some(0));
                 *self.list_state.offset_mut() = 0;
                 self.refresh().await?;
-            } else {
-                // Open file with default application
-                let _ = opener::open(&entry.path);
+            } else if let Err(error) = opener::open(&entry.path) {
+                self.notice = Some(format!("Could not open file: {error}"));
             }
         }
         Ok(())
@@ -834,7 +884,10 @@ impl App {
     async fn rename_selected(&mut self, new_name: &str) -> Result<()> {
         if let Some(entry) = self.selected_entry().cloned() {
             let new_path = entry.path.with_file_name(new_name);
-            tokio::fs::rename(&entry.path, &new_path).await?;
+            if let Err(error) = tokio::fs::rename(&entry.path, &new_path).await {
+                self.notice = Some(format!("Rename failed: {error}"));
+                return Ok(());
+            }
             self.refresh().await?;
         }
         Ok(())
@@ -842,14 +895,20 @@ impl App {
 
     async fn create_file(&mut self, name: &str) -> Result<()> {
         let path = self.current_path.join(name);
-        tokio::fs::write(&path, "").await?;
+        if let Err(error) = tokio::fs::write(&path, "").await {
+            self.notice = Some(format!("Could not create file: {error}"));
+            return Ok(());
+        }
         self.refresh().await?;
         Ok(())
     }
 
     async fn create_dir(&mut self, name: &str) -> Result<()> {
         let path = self.current_path.join(name);
-        tokio::fs::create_dir(&path).await?;
+        if let Err(error) = tokio::fs::create_dir(&path).await {
+            self.notice = Some(format!("Could not create directory: {error}"));
+            return Ok(());
+        }
         self.refresh().await?;
         Ok(())
     }
@@ -869,36 +928,55 @@ impl App {
     }
 
     async fn paste(&mut self) -> Result<()> {
+        let mut failed = false;
         for src in &self.clipboard_paths {
-            let file_name = src.file_name().unwrap();
+            let Some(file_name) = src.file_name() else {
+                continue;
+            };
             let dst = self.current_path.join(file_name);
 
-            match self.clipboard {
+            let result = match self.clipboard {
                 ClipboardOp::Copy => {
                     if src.is_dir() {
-                        copy_dir(src, &dst).await?;
+                        copy_dir(src, &dst).await
                     } else {
-                        tokio::fs::copy(src, &dst).await?;
+                        tokio::fs::copy(src, &dst)
+                            .await
+                            .map(|_| ())
+                            .map_err(anyhow::Error::from)
                     }
                 }
-                ClipboardOp::Cut => {
-                    tokio::fs::rename(src, &dst).await?;
-                }
-                _ => {}
+                ClipboardOp::Cut => tokio::fs::rename(src, &dst)
+                    .await
+                    .map_err(anyhow::Error::from),
+                ClipboardOp::None => Ok(()),
+            };
+
+            if let Err(error) = result {
+                self.notice = Some(format!("Paste failed: {error}"));
+                failed = true;
+                break;
             }
         }
-        self.clipboard = ClipboardOp::None;
-        self.clipboard_paths.clear();
+
+        if !failed {
+            self.clipboard = ClipboardOp::None;
+            self.clipboard_paths.clear();
+        }
         self.refresh().await?;
         Ok(())
     }
 
     async fn delete_selected(&mut self) -> Result<()> {
         if let Some(entry) = self.selected_entry().cloned() {
-            if entry.is_dir() {
-                tokio::fs::remove_dir_all(&entry.path).await?;
+            let result = if entry.is_dir() {
+                tokio::fs::remove_dir_all(&entry.path).await
             } else {
-                tokio::fs::remove_file(&entry.path).await?;
+                tokio::fs::remove_file(&entry.path).await
+            };
+            if let Err(error) = result {
+                self.notice = Some(format!("Delete failed: {error}"));
+                return Ok(());
             }
             self.refresh().await?;
         }

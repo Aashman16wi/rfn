@@ -79,7 +79,7 @@ USAGE:
     rfn [OPTIONS] [PATH]
 
 ARGS:
-    <PATH>    Path to start in (default: current directory)
+    <PATH>    Path to start in (default: home directory)
 
 OPTIONS:
     -h, --help              Print help
@@ -93,9 +93,11 @@ KEYBINDINGS:
         l / Right / Enter   Enter directory / open file
         H / Ctrl+h      Go to parent
         ~               Go to home
-        gg              Go to top
-        G               Go to bottom
+        Home            Go to top
+        G / End         Go to bottom
         Ctrl+u / Ctrl+d Page up / down
+        Mouse wheel     Scroll
+        Left click      Select
 
     File Operations:
         n               New file
@@ -113,14 +115,12 @@ KEYBINDINGS:
         R / Ctrl+r      Refresh
 
     Sorting:
-        sn              Sort by name
-        ss              Sort by size
-        st              Sort by time
-        se              Sort by extension
-        sr              Reverse sort
+        s               Cycle name -> size -> time -> extension
+        S               Reverse sort order
 
     Other:
         /               Search
+        Esc             Clear search
         ?               Toggle help
         q / Ctrl+c      Quit
 "#);
