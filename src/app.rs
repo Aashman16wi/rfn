@@ -86,6 +86,7 @@ pub struct App {
     list_inner: ratatui::layout::Rect,
     tabs: Vec<TabState>,
     active_tab: usize,
+    bookmarks: Vec<PathBuf>,
 
     preview_content: PreviewContent,
     preview_protocol: Option<StatefulProtocol>,
@@ -122,6 +123,7 @@ impl App {
         config: AppConfig,
         start_path: std::path::PathBuf,
         picker: Picker,
+        restore_tabs: bool,
     ) -> Result<Self> {
         let current_path = if start_path.is_absolute() {
             start_path
@@ -148,6 +150,7 @@ impl App {
             list_inner: ratatui::layout::Rect::default(),
             tabs: Vec::new(),
             active_tab: 0,
+            bookmarks: Vec::new(),
             preview_content: PreviewContent::none(),
             preview_protocol: None,
             git_statuses: Vec::new(),
@@ -174,6 +177,27 @@ impl App {
 
         app.refresh().await?;
         app.tabs.push(app.snapshot());
+
+        if restore_tabs {
+            if let Some(saved) = crate::state::load() {
+                let mut restored = Vec::new();
+                for path in &saved.tabs {
+                    if path.is_dir() {
+                        app.current_path = path.clone();
+                        app.refresh().await?;
+                        restored.push(app.snapshot());
+                    }
+                }
+                if !restored.is_empty() {
+                    app.tabs = restored;
+                    app.active_tab = saved.active.min(app.tabs.len() - 1);
+                    app.restore_active_tab();
+                    app.refresh().await?;
+                }
+                app.bookmarks = saved.bookmarks;
+            }
+        }
+
         Ok(app)
     }
 
@@ -204,6 +228,21 @@ impl App {
                 break;
             }
         }
+
+        let paths: Vec<PathBuf> = self
+            .tabs
+            .iter()
+            .enumerate()
+            .map(|(index, tab)| {
+                if index == self.active_tab {
+                    self.current_path.clone()
+                } else {
+                    tab.current_path.clone()
+                }
+            })
+            .collect();
+        let paths: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
+        crate::state::save(&paths, self.active_tab, &self.bookmarks);
 
         Ok(())
     }

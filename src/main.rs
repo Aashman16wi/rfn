@@ -4,6 +4,7 @@ mod fs;
 mod icons;
 mod keys;
 mod preview;
+mod state;
 mod types;
 mod ui;
 
@@ -23,13 +24,16 @@ use std::io;
 #[derive(Parser, Debug)]
 #[command(name = "rfn", version, about = "A minimal async terminal file manager")]
 struct Args {
-    /// Path to start in (default: home directory)
-    #[arg(default_value_t = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from(".")).to_string_lossy().into_owned())]
-    path: String,
+    /// Path to start in (default: home directory, restoring saved tabs)
+    path: Option<String>,
 
     /// Generate default config file to stdout
     #[arg(long)]
     generate_config: bool,
+
+    /// List built-in color themes
+    #[arg(long)]
+    themes: bool,
 
     /// Show help
     #[arg(short, long)]
@@ -50,11 +54,23 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    if args.themes {
+        for theme in crate::config::ColorConfig::THEMES {
+            println!("{theme}");
+        }
+        return Ok(());
+    }
+
     let config = AppConfig::load()?;
     let picker = crate::app::create_picker(&config);
     crate::preview::clean_preview_cache();
 
-    let start_path = std::path::PathBuf::from(&args.path);
+    let restore_tabs = args.path.is_none();
+    let start_path = args
+        .path
+        .map(std::path::PathBuf::from)
+        .or_else(dirs::home_dir)
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -62,7 +78,7 @@ async fn main() -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = ratatui::Terminal::new(backend)?;
 
-    let mut app = App::new(config, start_path, picker).await?;
+    let mut app = App::new(config, start_path, picker, restore_tabs).await?;
 
     let result = app.run(&mut terminal).await;
 
