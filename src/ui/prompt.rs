@@ -51,15 +51,10 @@ pub fn render_input(
 pub fn render_confirm(
     frame: &mut Frame,
     area: Rect,
-    mode: AppMode,
-    name: &str,
+    title: &str,
+    message: &str,
     colors: &ColorConfig,
 ) {
-    let (title, message) = match mode {
-        AppMode::ConfirmDelete => (" Delete ", format!("Delete \"{name}\"?")),
-        AppMode::ConfirmQuit => (" Quit ", "Quit rfn?".to_string()),
-        _ => return,
-    };
 
     let width = 56.min(area.width.saturating_sub(4)).max(24);
     let height = 5;
@@ -81,7 +76,7 @@ pub fn render_confirm(
 
     let text = vec![
         Line::from(Span::styled(
-            message,
+            message.to_string(),
             Style::default()
                 .fg(Color::White)
                 .add_modifier(Modifier::BOLD),

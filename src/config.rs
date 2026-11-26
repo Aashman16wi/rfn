@@ -55,6 +55,7 @@ pub struct ColorConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BehaviorConfig {
     pub confirm_delete: bool,
+    pub use_trash: bool,
     pub confirm_quit: bool,
     pub sort_by: SortBy,
     pub sort_dirs_first: bool,
@@ -176,6 +177,7 @@ impl Default for BehaviorConfig {
     fn default() -> Self {
         Self {
             confirm_delete: true,
+            use_trash: true,
             confirm_quit: false,
             sort_by: SortBy::Name,
             sort_dirs_first: true,
@@ -261,6 +263,7 @@ impl AppConfig {
             .set_default("ui.colors.git_ignored", "#565f89")?
             .set_default("ui.colors.preview_bg", "#1a1b26")?
             .set_default("behavior.confirm_delete", true)?
+            .set_default("behavior.use_trash", true)?
             .set_default("behavior.confirm_quit", false)?
             .set_default("behavior.sort_by", "name")?
             .set_default("behavior.sort_dirs_first", true)?

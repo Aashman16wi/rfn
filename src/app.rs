@@ -486,16 +486,30 @@ impl App {
                 &self.new_name_buffer,
                 &self.config.ui.colors,
             ),
-            AppMode::ConfirmDelete | AppMode::ConfirmQuit => {
+            AppMode::ConfirmDelete => {
                 let name = self
                     .selected_entry()
                     .map(|entry| entry.name.clone())
                     .unwrap_or_default();
+                let (title, message) = if self.config.behavior.use_trash {
+                    (" Trash ", format!("Move \"{name}\" to trash?"))
+                } else {
+                    (" Delete ", format!("Delete \"{name}\" permanently?"))
+                };
                 crate::ui::prompt::render_confirm(
                     frame,
                     area,
-                    self.mode,
-                    &name,
+                    title,
+                    &message,
+                    &self.config.ui.colors,
+                );
+            }
+            AppMode::ConfirmQuit => {
+                crate::ui::prompt::render_confirm(
+                    frame,
+                    area,
+                    " Quit ",
+                    "Quit rfn?",
                     &self.config.ui.colors,
                 );
             }
@@ -969,11 +983,18 @@ impl App {
 
     async fn delete_selected(&mut self) -> Result<()> {
         if let Some(entry) = self.selected_entry().cloned() {
-            let result = if entry.is_dir() {
-                tokio::fs::remove_dir_all(&entry.path).await
+            let result = if self.config.behavior.use_trash {
+                trash::delete(&entry.path).map_err(anyhow::Error::from)
+            } else if entry.is_dir() {
+                tokio::fs::remove_dir_all(&entry.path)
+                    .await
+                    .map_err(anyhow::Error::from)
             } else {
-                tokio::fs::remove_file(&entry.path).await
+                tokio::fs::remove_file(&entry.path)
+                    .await
+                    .map_err(anyhow::Error::from)
             };
+
             if let Err(error) = result {
                 self.notice = Some(format!("Delete failed: {error}"));
                 return Ok(());
