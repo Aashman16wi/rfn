@@ -53,10 +53,6 @@ pub fn render(
             "[Binary file]",
             Style::default().fg(muted),
         ))],
-        PreviewType::Directory => vec![Line::from(Span::styled(
-            "[Directory]",
-            Style::default().fg(muted),
-        ))],
         PreviewType::None => vec![Line::from(Span::styled(
             "[No preview]",
             Style::default().fg(muted),

@@ -1,6 +1,5 @@
 use crate::types::{FileEntry, FileType};
 use anyhow::{Context, Result};
-use walkdir::WalkDir;
 use mime_guess::from_path;
 use std::fs;
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
@@ -61,74 +60,6 @@ pub async fn read_dir(path: &Path, show_hidden: bool) -> Result<Vec<FileEntry>> 
                 git_status: Default::default(),
                 mime_type,
                 is_hidden: name.starts_with('.'),
-            });
-        }
-
-        Ok(entries)
-    })
-    .await?
-}
-
-pub async fn read_dir_recursive(path: &Path, show_hidden: bool) -> Result<Vec<FileEntry>> {
-    let path = path.to_path_buf();
-    let show_hidden = show_hidden;
-
-    task::spawn_blocking(move || {
-        let mut entries = Vec::new();
-
-        let walker = WalkDir::new(&path)
-            .follow_links(false)
-            .into_iter();
-
-        for entry in walker.filter_map(Result::ok) {
-            let file_name = entry.file_name();
-            let name = file_name.to_string_lossy().to_string();
-
-            if !show_hidden && name.starts_with('.') {
-                continue;
-            }
-
-            let entry_path = entry.path();
-            let metadata = match entry.metadata() {
-                Ok(m) => m,
-                Err(_) => continue,
-            };
-            let file_type = metadata.file_type();
-            let size = metadata.len();
-            let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-            let permissions = metadata.mode() & 0o777;
-
-            let ft = if file_type.is_dir() {
-                FileType::Directory
-            } else if file_type.is_symlink() {
-                FileType::Symlink
-            } else if file_type.is_file() {
-                FileType::File
-            } else if FileTypeExt::is_block_device(&file_type) {
-                FileType::BlockDevice
-            } else if FileTypeExt::is_char_device(&file_type) {
-                FileType::CharDevice
-            } else if FileTypeExt::is_fifo(&file_type) {
-                FileType::Fifo
-            } else if FileTypeExt::is_socket(&file_type) {
-                FileType::Socket
-            } else {
-                FileType::Unknown
-            };
-
-            let mime_type = from_path(&entry_path).first_raw().map(|s| s.to_string());
-
-            let is_hidden = name.starts_with('.');
-            entries.push(FileEntry {
-                path: entry_path.to_path_buf(),
-                name,
-                file_type: ft,
-                size,
-                modified,
-                permissions,
-                git_status: Default::default(),
-                mime_type,
-                is_hidden,
             });
         }
 

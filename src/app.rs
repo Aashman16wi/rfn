@@ -525,7 +525,6 @@ impl App {
                     AppMode::NewDir => self.handle_new_dir(key).await?,
                     AppMode::ConfirmDelete => self.handle_confirm_delete(key).await?,
                     AppMode::ConfirmQuit => self.handle_confirm_quit(key).await?,
-                    AppMode::Help => self.handle_help(key).await?,
                 }
             }
             Event::Mouse(mouse) => {
@@ -839,7 +838,8 @@ impl App {
 
     async fn enter(&mut self) -> Result<()> {
         if let Some(entry) = self.selected_entry().cloned() {
-            if entry.is_dir() {
+            // Follow symlinks to directories when entering.
+            if entry.path.is_dir() {
                 self.current_path = entry.path;
                 self.search_query.clear();
                 self.list_state.select(Some(0));

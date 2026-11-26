@@ -26,7 +26,6 @@ pub struct UiConfig {
     pub show_hidden: bool,
     pub show_git_status: bool,
     pub show_parent: bool,
-    pub icon_theme: String,
     pub colors: ColorConfig,
 }
 
@@ -55,7 +54,6 @@ pub struct ColorConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BehaviorConfig {
-    pub auto_cd: bool,
     pub confirm_delete: bool,
     pub confirm_quit: bool,
     pub sort_by: SortBy,
@@ -94,7 +92,6 @@ pub enum ImageBackend {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GitConfig {
     pub enabled: bool,
-    pub show_ignored: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -144,7 +141,6 @@ impl Default for UiConfig {
             show_hidden: false,
             show_git_status: true,
             show_parent: true,
-            icon_theme: "nerd".to_string(),
             colors: ColorConfig::default(),
         }
     }
@@ -179,7 +175,6 @@ impl Default for ColorConfig {
 impl Default for BehaviorConfig {
     fn default() -> Self {
         Self {
-            auto_cd: true,
             confirm_delete: true,
             confirm_quit: false,
             sort_by: SortBy::Name,
@@ -204,7 +199,6 @@ impl Default for GitConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            show_ignored: false,
         }
     }
 }
@@ -247,7 +241,6 @@ impl AppConfig {
             .set_default("ui.show_hidden", false)?
             .set_default("ui.show_git_status", true)?
             .set_default("ui.show_parent", true)?
-            .set_default("ui.icon_theme", "nerd")?
             .set_default("ui.colors.bg", "#1a1b26")?
             .set_default("ui.colors.fg", "#c0caf5")?
             .set_default("ui.colors.muted", "#565f89")?
@@ -267,7 +260,6 @@ impl AppConfig {
             .set_default("ui.colors.git_untracked", "#ff9e64")?
             .set_default("ui.colors.git_ignored", "#565f89")?
             .set_default("ui.colors.preview_bg", "#1a1b26")?
-            .set_default("behavior.auto_cd", true)?
             .set_default("behavior.confirm_delete", true)?
             .set_default("behavior.confirm_quit", false)?
             .set_default("behavior.sort_by", "name")?
@@ -278,7 +270,6 @@ impl AppConfig {
             .set_default("preview.show_images", true)?
             .set_default("preview.image_backend", "auto")?
             .set_default("git.enabled", true)?
-            .set_default("git.show_ignored", false)?
             .set_default("keys.quit", vec!["q", "ctrl+c"])?
             .set_default("keys.up", vec!["k", "up"])?
             .set_default("keys.down", vec!["j", "down"])?

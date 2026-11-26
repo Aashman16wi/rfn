@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 description = "A minimal async terminal file manager"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/Aashman16wi/rfn"
+readme = "README.md"
 
 [dependencies]
 # TUI framework
@@ -15,7 +15,6 @@ crossterm = "0.28"
 tokio = { version = "1.40", features = ["full"] }
 
 # File system
-walkdir = "2"
 mime_guess = "2.0"
 
 # Git

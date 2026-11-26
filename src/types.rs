@@ -59,9 +59,6 @@ impl FileEntry {
         self.path.extension().and_then(|s| s.to_str())
     }
 
-    pub fn display_name(&self) -> &str {
-        &self.name
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,7 +66,6 @@ pub enum PreviewType {
     Text,
     Image,
     Binary,
-    Directory,
     None,
 }
 
@@ -78,7 +74,6 @@ pub struct PreviewContent {
     pub content: String,
     pub preview_type: PreviewType,
     pub image_path: Option<PathBuf>,
-    pub truncated: bool,
 }
 
 impl PreviewContent {
@@ -87,7 +82,6 @@ impl PreviewContent {
             content,
             preview_type: PreviewType::Text,
             image_path: None,
-            truncated: false,
         }
     }
 
@@ -96,7 +90,6 @@ impl PreviewContent {
             content: String::new(),
             preview_type: PreviewType::Image,
             image_path: Some(path),
-            truncated: false,
         }
     }
 
@@ -105,16 +98,6 @@ impl PreviewContent {
             content: "[Binary file]".to_string(),
             preview_type: PreviewType::Binary,
             image_path: None,
-            truncated: false,
-        }
-    }
-
-    pub fn directory() -> Self {
-        Self {
-            content: "[Directory]".to_string(),
-            preview_type: PreviewType::Directory,
-            image_path: None,
-            truncated: false,
         }
     }
 
@@ -123,7 +106,6 @@ impl PreviewContent {
             content: String::new(),
             preview_type: PreviewType::None,
             image_path: None,
-            truncated: false,
         }
     }
 }
@@ -137,7 +119,6 @@ pub enum AppMode {
     NewDir,
     ConfirmDelete,
     ConfirmQuit,
-    Help,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
