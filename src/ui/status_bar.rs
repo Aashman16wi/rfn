@@ -18,6 +18,7 @@ pub fn render(
     selected_entry: Option<&FileEntry>,
     clipboard: ClipboardOp,
     clipboard_count: usize,
+    marked_count: usize,
     show_hidden: bool,
     show_preview: bool,
     show_git: bool,
@@ -87,6 +88,17 @@ pub fn render(
                 Style::default().bg(Color::Rgb(r, g, b)).fg(Color::Black),
             ));
         }
+    }
+
+    if marked_count > 0 {
+        left.push(Span::raw(" "));
+        left.push(Span::styled(
+            format!(" {marked_count} marked "),
+            Style::default()
+                .bg(parse_color(&colors.git_modified))
+                .fg(parse_color(&colors.bg))
+                .add_modifier(Modifier::BOLD),
+        ));
     }
 
     if clipboard != ClipboardOp::None && clipboard_count > 0 {
@@ -173,6 +185,7 @@ fn mode_style(mode: AppMode, accent: Color) -> (&'static str, Color) {
         AppMode::ConfirmDelete => ("DELETE", Color::Rgb(247, 118, 142)),
         AppMode::ConfirmQuit => ("QUIT", Color::Rgb(247, 118, 142)),
         AppMode::ConfirmOverwrite => ("OVERWRITE", Color::Rgb(224, 175, 104)),
+        AppMode::Visual => ("VISUAL", Color::Rgb(224, 175, 104)),
     }
 }
 

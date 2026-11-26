@@ -2,6 +2,9 @@ use crate::config::ColorConfig;
 use crate::types::{FileEntry, GitStatus};
 use crate::ui::format::format_size;
 use crate::ui::parse_color;
+use std::collections::HashSet;
+use std::path::PathBuf;
+
 use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
@@ -19,6 +22,7 @@ pub fn render(
     colors: &ColorConfig,
     show_icons: bool,
     show_git: bool,
+    marked: &HashSet<PathBuf>,
     title: &str,
 ) -> Rect {
     let block = pane_block(title, colors);
@@ -29,7 +33,16 @@ pub fn render(
         .enumerate()
         .map(|(index, entry)| {
             let selected = state.selected() == Some(index);
-            row(entry, inner.width, colors, show_icons, show_git, selected)
+            let is_marked = marked.contains(&entry.path);
+            row(
+                entry,
+                inner.width,
+                colors,
+                show_icons,
+                show_git,
+                selected,
+                is_marked,
+            )
         })
         .collect();
 
@@ -117,14 +130,26 @@ fn row(
     show_icons: bool,
     show_git: bool,
     selected: bool,
+    marked: bool,
 ) -> ListItem<'static> {
     let accent = parse_color(&colors.accent);
     let muted = parse_color(&colors.muted);
 
     let mut spans = Vec::new();
+    let gutter = if selected {
+        "▍ "
+    } else if marked {
+        "▪ "
+    } else {
+        "  "
+    };
     spans.push(Span::styled(
-        if selected { "▍ " } else { "  " },
-        Style::default().fg(accent),
+        gutter,
+        Style::default().fg(if marked {
+            parse_color(&colors.git_modified)
+        } else {
+            accent
+        }),
     ));
 
     let icon = if show_icons {
@@ -150,19 +175,24 @@ fn row(
 
     let name_color = if selected {
         parse_color(&colors.selected_fg)
+    } else if marked {
+        parse_color(&colors.git_modified)
     } else {
         name_color(entry, colors)
     };
 
+    let mut modifiers = if entry.is_dir() {
+        Modifier::BOLD
+    } else {
+        Modifier::empty()
+    };
+    if marked {
+        modifiers |= Modifier::BOLD;
+    }
+
     spans.push(Span::styled(
         name,
-        Style::default()
-            .fg(name_color)
-            .add_modifier(if entry.is_dir() {
-                Modifier::BOLD
-            } else {
-                Modifier::empty()
-            }),
+        Style::default().fg(name_color).add_modifier(modifiers),
     ));
 
     let git_icon = if show_git && entry.git_status != GitStatus::Unmodified {

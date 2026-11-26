@@ -120,6 +120,7 @@ pub enum AppMode {
     ConfirmDelete,
     ConfirmQuit,
     ConfirmOverwrite,
+    Visual,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

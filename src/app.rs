@@ -17,6 +17,7 @@ use ratatui_image::{
     picker::{Picker, ProtocolType},
     protocol::StatefulProtocol,
 };
+use std::collections::HashSet;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -96,6 +97,7 @@ pub struct App {
 
     clipboard: ClipboardOp,
     clipboard_paths: Vec<PathBuf>,
+    marked: HashSet<PathBuf>,
 
     show_hidden: bool,
     show_preview: bool,
@@ -152,6 +154,7 @@ impl App {
             new_name_buffer: String::new(),
             clipboard: ClipboardOp::None,
             clipboard_paths: Vec::new(),
+            marked: HashSet::new(),
             show_hidden,
             show_preview,
             show_git,
@@ -388,6 +391,8 @@ impl App {
             return Ok(());
         }
         self.save_active_tab();
+        self.marked.clear();
+        self.mode = AppMode::Normal;
         self.active_tab = index;
         self.restore_active_tab();
         self.refresh().await?;
@@ -407,6 +412,8 @@ impl App {
             return Ok(());
         }
 
+        self.marked.clear();
+        self.mode = AppMode::Normal;
         self.tabs.remove(self.active_tab);
         if self.active_tab >= self.tabs.len() {
             self.active_tab = self.tabs.len() - 1;
@@ -414,6 +421,42 @@ impl App {
         self.restore_active_tab();
         self.refresh().await?;
         Ok(())
+    }
+
+    fn target_paths(&self) -> Vec<PathBuf> {
+        if self.marked.is_empty() {
+            return self
+                .selected_entry()
+                .map(|entry| vec![entry.path.clone()])
+                .unwrap_or_default();
+        }
+
+        self.entries
+            .iter()
+            .filter(|entry| self.marked.contains(&entry.path))
+            .map(|entry| entry.path.clone())
+            .collect()
+    }
+
+    fn mark_current(&mut self) {
+        if let Some(path) = self.selected_entry().map(|entry| entry.path.clone()) {
+            self.marked.insert(path);
+        }
+    }
+
+    fn toggle_mark(&mut self) {
+        if let Some(path) = self.selected_entry().map(|entry| entry.path.clone()) {
+            if !self.marked.insert(path.clone()) {
+                self.marked.remove(&path);
+            }
+        }
+    }
+
+    fn clear_marks(&mut self) {
+        self.marked.clear();
+        if self.mode == AppMode::Visual {
+            self.mode = AppMode::Normal;
+        }
     }
 
     fn selected_entry(&self) -> Option<&FileEntry> {
@@ -506,6 +549,7 @@ impl App {
             colors,
             self.config.ui.show_icons,
             self.show_git,
+            &self.marked,
             &current_title,
         );
 
@@ -557,6 +601,7 @@ impl App {
             selected_entry,
             self.clipboard,
             self.clipboard_paths.len(),
+            self.marked.len(),
             self.show_hidden,
             self.show_preview,
             self.show_git,
@@ -657,6 +702,7 @@ impl App {
                     AppMode::ConfirmDelete => self.handle_confirm_delete(key).await?,
                     AppMode::ConfirmQuit => self.handle_confirm_quit(key).await?,
                     AppMode::ConfirmOverwrite => self.handle_confirm_overwrite(key).await?,
+                    AppMode::Visual => self.handle_normal(key).await?,
                 }
             }
             Event::Mouse(mouse) => {
@@ -681,6 +727,9 @@ impl App {
                     let index = self.list_state.offset() + (mouse.row - inner.y) as usize;
                     if index < self.display.len() {
                         self.list_state.select(Some(index));
+                        if self.mode == AppMode::Visual {
+                            self.mark_current();
+                        }
                         self.update_preview().await;
                     }
                 }
@@ -701,11 +750,34 @@ impl App {
     async fn handle_normal(&mut self, key: crossterm::event::KeyEvent) -> Result<()> {
         use crossterm::event::{KeyCode, KeyModifiers};
 
-        if key.code == KeyCode::Esc && !self.search_query.is_empty() {
-            self.search_query.clear();
-            self.rebuild_display();
-            self.update_preview().await;
-            return Ok(());
+        if key.code == KeyCode::Esc {
+            if self.mode == AppMode::Visual || !self.marked.is_empty() {
+                self.clear_marks();
+                return Ok(());
+            }
+            if !self.search_query.is_empty() {
+                self.search_query.clear();
+                self.rebuild_display();
+                self.update_preview().await;
+                return Ok(());
+            }
+        }
+
+        match key.code {
+            KeyCode::Char('v') => {
+                if self.mode == AppMode::Visual {
+                    self.mode = AppMode::Normal;
+                } else {
+                    self.mode = AppMode::Visual;
+                    self.mark_current();
+                }
+                return Ok(());
+            }
+            KeyCode::Char(' ') => {
+                self.toggle_mark();
+                return Ok(());
+            }
+            _ => {}
         }
 
         // Vim-style jump keys that do not need a config entry.
@@ -714,11 +786,17 @@ impl App {
             match key.code {
                 KeyCode::Char('d') => {
                     page_down(&mut self.list_state, self.display.len(), page);
+                    if self.mode == AppMode::Visual {
+                        self.mark_current();
+                    }
                     self.update_preview().await;
                     return Ok(());
                 }
                 KeyCode::Char('u') => {
                     page_up(&mut self.list_state, page);
+                    if self.mode == AppMode::Visual {
+                        self.mark_current();
+                    }
                     self.update_preview().await;
                     return Ok(());
                 }
@@ -728,21 +806,33 @@ impl App {
         match key.code {
             KeyCode::PageDown => {
                 page_down(&mut self.list_state, self.display.len(), page);
+                if self.mode == AppMode::Visual {
+                    self.mark_current();
+                }
                 self.update_preview().await;
                 return Ok(());
             }
             KeyCode::PageUp => {
                 page_up(&mut self.list_state, page);
+                if self.mode == AppMode::Visual {
+                    self.mark_current();
+                }
                 self.update_preview().await;
                 return Ok(());
             }
             KeyCode::Home => {
                 go_to_top(&mut self.list_state);
+                if self.mode == AppMode::Visual {
+                    self.mark_current();
+                }
                 self.update_preview().await;
                 return Ok(());
             }
             KeyCode::End | KeyCode::Char('G') => {
                 go_to_bottom(&mut self.list_state, self.display.len());
+                if self.mode == AppMode::Visual {
+                    self.mark_current();
+                }
                 self.update_preview().await;
                 return Ok(());
             }
@@ -767,10 +857,16 @@ impl App {
                 }
                 Action::Up => {
                     previous(&mut self.list_state, self.display.len());
+                    if self.mode == AppMode::Visual {
+                        self.mark_current();
+                    }
                     self.update_preview().await;
                 }
                 Action::Down => {
                     next(&mut self.list_state, self.display.len());
+                    if self.mode == AppMode::Visual {
+                        self.mark_current();
+                    }
                     self.update_preview().await;
                 }
                 Action::Left => self.go_parent().await?,
@@ -790,6 +886,7 @@ impl App {
                 Action::Cut => self.cut_selected(),
                 Action::Paste => self.start_paste().await?,
                 Action::Search => {
+                    self.marked.clear();
                     self.search_query.clear();
                     self.rebuild_display();
                     self.mode = AppMode::Search;
@@ -1013,6 +1110,7 @@ impl App {
         if let Some(entry) = self.selected_entry().cloned() {
             // Follow symlinks to directories when entering.
             if entry.path.is_dir() {
+                self.clear_marks();
                 self.current_path = entry.path;
                 self.search_query.clear();
                 self.list_state.select(Some(0));
@@ -1026,8 +1124,9 @@ impl App {
     }
 
     async fn go_parent(&mut self) -> Result<()> {
-        if let Some(parent) = self.current_path.parent() {
-            self.current_path = parent.to_path_buf();
+        if let Some(parent) = self.current_path.parent().map(Path::to_path_buf) {
+            self.clear_marks();
+            self.current_path = parent;
             self.search_query.clear();
             self.list_state.select(Some(0));
             *self.list_state.offset_mut() = 0;
@@ -1038,6 +1137,7 @@ impl App {
 
     async fn go_home(&mut self) -> Result<()> {
         if let Some(home) = dirs::home_dir() {
+            self.clear_marks();
             self.current_path = home;
             self.search_query.clear();
             self.list_state.select(Some(0));
@@ -1087,17 +1187,21 @@ impl App {
     }
 
     fn copy_selected(&mut self) {
-        if let Some(path) = self.selected_entry().map(|entry| entry.path.clone()) {
+        let paths = self.target_paths();
+        if !paths.is_empty() {
             self.clipboard = ClipboardOp::Copy;
-            self.clipboard_paths = vec![path];
+            self.clipboard_paths = paths;
         }
+        self.clear_marks();
     }
 
     fn cut_selected(&mut self) {
-        if let Some(path) = self.selected_entry().map(|entry| entry.path.clone()) {
+        let paths = self.target_paths();
+        if !paths.is_empty() {
             self.clipboard = ClipboardOp::Cut;
-            self.clipboard_paths = vec![path];
+            self.clipboard_paths = paths;
         }
+        self.clear_marks();
     }
 
     async fn start_paste(&mut self) -> Result<()> {
@@ -1185,31 +1289,45 @@ impl App {
         if !failed {
             self.clipboard = ClipboardOp::None;
             self.clipboard_paths.clear();
+            self.marked.clear();
         }
         self.refresh().await?;
         Ok(())
     }
 
     async fn delete_selected(&mut self) -> Result<()> {
-        if let Some(entry) = self.selected_entry().cloned() {
+        let paths = self.target_paths();
+        if paths.is_empty() {
+            return Ok(());
+        }
+
+        let mut failures = 0;
+        for path in &paths {
             let result = if self.config.behavior.use_trash {
-                trash::delete(&entry.path).map_err(anyhow::Error::from)
-            } else if entry.is_dir() {
-                tokio::fs::remove_dir_all(&entry.path)
+                trash::delete(path).map_err(anyhow::Error::from)
+            } else if path.is_dir() {
+                tokio::fs::remove_dir_all(path)
                     .await
                     .map_err(anyhow::Error::from)
             } else {
-                tokio::fs::remove_file(&entry.path)
+                tokio::fs::remove_file(path)
                     .await
                     .map_err(anyhow::Error::from)
             };
-
-            if let Err(error) = result {
-                self.notice = Some(format!("Delete failed: {error}"));
-                return Ok(());
+            if result.is_err() {
+                failures += 1;
             }
-            self.refresh().await?;
         }
+
+        if failures > 0 {
+            self.notice = Some(format!(
+                "{failures} of {} item(s) could not be deleted",
+                paths.len()
+            ));
+        }
+
+        self.clear_marks();
+        self.refresh().await?;
         Ok(())
     }
 }
