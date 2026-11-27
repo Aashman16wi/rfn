@@ -139,6 +139,7 @@ pub struct KeyConfig {
     pub bookmark_jump: Vec<String>,
     pub trash: Vec<String>,
     pub open_with: Vec<String>,
+    pub queue: Vec<String>,
 }
 
 impl Default for AppConfig {
@@ -307,6 +308,7 @@ impl Default for KeyConfig {
             bookmark_jump: vec!["M".into()],
             trash: vec!["T".into()],
             open_with: vec!["o".into()],
+            queue: vec!["Q".into()],
         }
     }
 }
@@ -388,7 +390,8 @@ impl AppConfig {
             .set_default("keys.bookmark_add", vec!["m"])?
             .set_default("keys.bookmark_jump", vec!["M"])?
             .set_default("keys.trash", vec!["T"])?
-            .set_default("keys.open_with", vec!["o"])?;
+            .set_default("keys.open_with", vec!["o"])?
+            .set_default("keys.queue", vec!["Q"])?;
 
         if let Some(config_dir) = config_dir() {
             let config_path = config_dir.join("rfn").join("config.toml");

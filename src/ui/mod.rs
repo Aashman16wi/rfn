@@ -3,6 +3,7 @@ pub mod format;
 pub mod help;
 pub mod preview;
 pub mod prompt;
+pub mod queue;
 pub mod status_bar;
 pub mod top_bar;
 

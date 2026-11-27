@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::time::SystemTime;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileType {
     Directory,
     File,
@@ -123,6 +123,7 @@ pub enum AppMode {
     Visual,
     TrashBrowser,
     OpenWith,
+    QueueManager,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

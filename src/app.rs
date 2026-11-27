@@ -2,6 +2,9 @@ use crate::config::{AppConfig, SortBy};
 use crate::fs::{apply_git_status, find_git_root, get_git_status, read_dir, sort_entries};
 use crate::keys::{Action, KeyMapper};
 use crate::preview::generate_preview;
+use crate::state::{QueueItem, QueueStatus, load_queue, save_queue};
+
+
 use crate::types::{AppMode, ClipboardOp, FileEntry, PreviewContent, PreviewType};
 use crate::ui::file_list::{
     go_to_bottom, go_to_top, next, page_down, page_up, previous,
@@ -26,6 +29,20 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::time::interval;
+use tokio::sync::mpsc;
+
+/// Progress messages sent from the background queue worker back to the UI.
+#[derive(Debug)]
+enum QueueEvent {
+    Finished(usize, std::result::Result<(), String>),
+    AllDone,
+}
+
+/// What woke the event loop.
+enum InputEvent {
+    Term(Event),
+    Queue(QueueEvent),
+}
 
 /// Build an image picker without poking at stdio. `Picker::from_query_stdio`
 /// spawns a thread that can disable raw mode behind our back when the terminal
@@ -109,8 +126,10 @@ pub struct App {
 
     clipboard: ClipboardOp,
     clipboard_paths: Vec<PathBuf>,
-    queue: Vec<crate::state::QueueItem>,
-    queue_notify: Option<String>,
+    queue: Vec<QueueItem>,
+    queue_state: ratatui::widgets::ListState,
+    queue_rx: Option<mpsc::UnboundedReceiver<QueueEvent>>,
+    queue_running: bool,
     marked: HashSet<PathBuf>,
 
     show_hidden: bool,
@@ -176,8 +195,10 @@ impl App {
             new_name_buffer: String::new(),
             clipboard: ClipboardOp::None,
             clipboard_paths: Vec::new(),
-            queue: Vec::new(),
-            queue_notify: None,
+            queue: load_queue(),
+            queue_state: ratatui::widgets::ListState::default(),
+            queue_rx: None,
+            queue_running: false,
             marked: HashSet::new(),
             show_hidden,
             show_preview,
@@ -230,10 +251,17 @@ impl App {
                 }
                 event = self.read_event() => {
                     if let Some(event) = event? {
-                        self.handle_event(event).await?;
-                        if self.pending_bulk_rename {
-                            self.pending_bulk_rename = false;
-                            self.bulk_rename(terminal).await?;
+                        match event {
+                            InputEvent::Term(event) => {
+                                self.handle_event(event).await?;
+                                if self.pending_bulk_rename {
+                                    self.pending_bulk_rename = false;
+                                    self.bulk_rename(terminal).await?;
+                                }
+                            }
+                            InputEvent::Queue(event) => {
+                                self.handle_queue_event(event).await?;
+                            }
                         }
                         terminal.draw(|f| self.render(f))?;
                     }
@@ -259,12 +287,26 @@ impl App {
             .collect();
         let paths: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
         crate::state::save(&paths, self.active_tab, &self.bookmarks);
+        save_queue(&self.queue);
 
         Ok(())
     }
 
-    async fn read_event(&self) -> Result<Option<Event>> {
+    async fn read_event(&mut self) -> Result<Option<InputEvent>> {
         loop {
+            // Drain queue progress before waiting on the terminal so a busy
+            // copy does not make the interface feel frozen.
+            if let Some(rx) = self.queue_rx.as_mut() {
+                match rx.try_recv() {
+                    Ok(event) => return Ok(Some(InputEvent::Queue(event))),
+                    Err(mpsc::error::TryRecvError::Disconnected) => {
+                        self.queue_rx = None;
+                        self.queue_running = false;
+                    }
+                    Err(mpsc::error::TryRecvError::Empty) => {}
+                }
+            }
+
             if !crossterm::event::poll(Duration::from_millis(50))? {
                 return Ok(None);
             }
@@ -278,7 +320,7 @@ impl App {
             ) {
                 continue;
             }
-            return Ok(Some(event));
+            return Ok(Some(InputEvent::Term(event)));
         }
     }
 
@@ -430,8 +472,9 @@ impl App {
 
         let max_size = self.config.preview.max_size;
         let show_images = self.config.preview.show_images;
+        let show_icons = self.config.ui.show_icons;
 
-        self.preview_content = match generate_preview(&entry, max_size, show_images).await {
+        self.preview_content = match generate_preview(&entry, max_size, show_images, show_icons).await {
             Ok(content) => content,
             Err(_) => PreviewContent::none(),
         };
@@ -783,6 +826,17 @@ impl App {
                     &self.config.ui.colors,
                 );
             }
+            AppMode::QueueManager => {
+                crate::ui::queue::render(
+                    frame,
+                    area,
+                    &self.queue,
+                    &mut self.queue_state,
+                    self.queue_running,
+                    self.notice.as_deref(),
+                    &self.config.ui.colors,
+                );
+            }
             _ => {}
         }
     }
@@ -813,6 +867,7 @@ impl App {
                     AppMode::Visual => self.handle_normal(key).await?,
                     AppMode::TrashBrowser => self.handle_trash(key).await?,
                     AppMode::OpenWith => self.handle_open_with(key).await?,
+                    AppMode::QueueManager => self.handle_queue(key).await?,
                 }
             }
             Event::Mouse(mouse) => {
@@ -1076,6 +1131,14 @@ impl App {
                 }
                 Action::OpenTrash => self.mode = AppMode::TrashBrowser,
                 Action::OpenWith => self.mode = AppMode::OpenWith,
+                Action::QueueManager => {
+                    self.mode = AppMode::QueueManager;
+                    if self.queue.is_empty() {
+                        self.queue_state.select(None);
+                    } else {
+                        self.queue_state.select(Some(0));
+                    }
+                }
             }
         }
         Ok(())
@@ -1324,36 +1387,35 @@ impl App {
 
     fn copy_selected(&mut self) {
         let paths = self.target_paths();
-        if !paths.is_empty() {
-            for path in &paths {
-                self.queue.push(QueueItem {
-                    op: "copy".to_string(),
-                    src: path.clone(),
-                    dst: self.current_path.join(path.file_name().unwrap()),
-                });
-            }
-            self.queue_notify = Some(format!("{} item(s) added to copy queue", paths.len()));
+        if paths.is_empty() {
+            return;
         }
+        self.clipboard = ClipboardOp::Copy;
+        self.clipboard_paths = paths;
+        self.notice = Some(format!(
+            "Yanked {} item(s) — p to paste, Q to view the queue",
+            self.clipboard_paths.len()
+        ));
         self.clear_marks();
     }
 
     fn cut_selected(&mut self) {
         let paths = self.target_paths();
-        if !paths.is_empty() {
-            for path in &paths {
-                self.queue.push(QueueItem {
-                    op: "move".to_string(),
-                    src: path.clone(),
-                    dst: self.current_path.join(path.file_name().unwrap()),
-                });
-            }
-            self.queue_notify = Some(format!("{} item(s) added to move queue", paths.len()));
+        if paths.is_empty() {
+            return;
         }
+        self.clipboard = ClipboardOp::Cut;
+        self.clipboard_paths = paths;
+        self.notice = Some(format!(
+            "Cut {} item(s) — p to move, Q to view the queue",
+            self.clipboard_paths.len()
+        ));
         self.clear_marks();
     }
 
     async fn start_paste(&mut self) -> Result<()> {
         if self.clipboard == ClipboardOp::None || self.clipboard_paths.is_empty() {
+            self.notice = Some("Nothing to paste — yank with y or x first".to_string());
             return Ok(());
         }
 
@@ -1364,8 +1426,7 @@ impl App {
             };
             let dst = self.current_path.join(file_name);
             if dst == *src {
-                self.notice =
-                    Some("Source and destination are the same file".to_string());
+                self.notice = Some("Source and destination are the same file".to_string());
                 return Ok(());
             }
             if dst.exists() {
@@ -1382,64 +1443,124 @@ impl App {
         Ok(())
     }
 
+    /// Turn the clipboard into real transfer tasks. The tasks are queued and a
+    /// worker starts immediately, so pasting a huge directory no longer freezes
+    /// the interface. `Q` shows live progress.
     async fn paste(&mut self, overwrite: bool) -> Result<()> {
-        let mut failed = false;
+        let op = match self.clipboard {
+            ClipboardOp::Copy => "copy",
+            ClipboardOp::Cut => "move",
+            ClipboardOp::None => return Ok(()),
+        };
+
+        let mut added = 0usize;
         for src in &self.clipboard_paths {
             let Some(file_name) = src.file_name() else {
                 continue;
             };
             let dst = self.current_path.join(file_name);
-
             if dst == *src {
-                self.notice =
-                    Some("Source and destination are the same file".to_string());
-                failed = true;
-                break;
+                self.notice = Some("Source and destination are the same file".to_string());
+                continue;
             }
-
-            if overwrite && dst.exists() {
-                let removal = if dst.is_dir() {
-                    tokio::fs::remove_dir_all(&dst).await
-                } else {
-                    tokio::fs::remove_file(&dst).await
-                };
-                if let Err(error) = removal {
-                    self.notice = Some(format!("Overwrite failed: {error}"));
-                    failed = true;
-                    break;
-                }
-            }
-
-            let result = match self.clipboard {
-                ClipboardOp::Copy => {
-                    if src.is_dir() {
-                        copy_dir(src, &dst).await
-                    } else {
-                        tokio::fs::copy(src, &dst)
-                            .await
-                            .map(|_| ())
-                            .map_err(anyhow::Error::from)
-                    }
-                }
-                ClipboardOp::Cut => tokio::fs::rename(src, &dst)
-                    .await
-                    .map_err(anyhow::Error::from),
-                ClipboardOp::None => Ok(()),
-            };
-
-            if let Err(error) = result {
-                self.notice = Some(format!("Paste failed: {error}"));
-                failed = true;
-                break;
-            }
+            self.queue.push(QueueItem {
+                op: op.to_string(),
+                src: src.clone(),
+                dst,
+                status: QueueStatus::Pending,
+                overwrite,
+                error: None,
+            });
+            added += 1;
         }
 
-        if !failed {
+        if added > 0 {
+            self.notice = Some(format!(
+                "Queued {added} {} task(s) — Q to watch progress",
+                if op == "copy" { "copy" } else { "move" }
+            ));
             self.clipboard = ClipboardOp::None;
             self.clipboard_paths.clear();
             self.marked.clear();
+            self.start_queue();
         }
-        self.refresh().await?;
+        save_queue(&self.queue);
+        Ok(())
+    }
+
+    /// Spawn the background worker for every pending or failed task.
+    fn start_queue(&mut self) {
+        if self.queue_running {
+            return;
+        }
+
+        let tasks: Vec<(usize, QueueItem)> = self
+            .queue
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| matches!(item.status, QueueStatus::Pending | QueueStatus::Failed))
+            .map(|(index, item)| (index, item.clone()))
+            .collect();
+        if tasks.is_empty() {
+            return;
+        }
+
+        for (index, _) in &tasks {
+            self.queue[*index].status = QueueStatus::Running;
+            self.queue[*index].error = None;
+        }
+
+        let (tx, rx) = mpsc::unbounded_channel();
+        self.queue_rx = Some(rx);
+        self.queue_running = true;
+
+        tokio::spawn(async move {
+            for (index, item) in tasks {
+                let result = execute_queue_item(&item).await;
+                let _ = tx.send(QueueEvent::Finished(index, result));
+            }
+            let _ = tx.send(QueueEvent::AllDone);
+        });
+    }
+
+    async fn handle_queue_event(&mut self, event: QueueEvent) -> Result<()> {
+        match event {
+            QueueEvent::Finished(index, result) => {
+                if let Some(item) = self.queue.get_mut(index) {
+                    match result {
+                        Ok(()) => {
+                            item.status = QueueStatus::Done;
+                            item.error = None;
+                        }
+                        Err(error) => {
+                            item.status = QueueStatus::Failed;
+                            item.error = Some(error);
+                        }
+                    }
+                }
+            }
+            QueueEvent::AllDone => {
+                self.queue_running = false;
+                self.queue_rx = None;
+                let done = self
+                    .queue
+                    .iter()
+                    .filter(|item| item.status == QueueStatus::Done)
+                    .count();
+                let failed = self
+                    .queue
+                    .iter()
+                    .filter(|item| item.status == QueueStatus::Failed)
+                    .count();
+                self.notice = Some(if failed == 0 {
+                    format!("Queue finished: {done} task(s) completed")
+                } else {
+                    format!("Queue finished: {done} done, {failed} failed — Q to inspect")
+                });
+                save_queue(&self.queue);
+                self.refresh().await?;
+            }
+        }
         Ok(())
     }
 
@@ -1735,6 +1856,118 @@ impl App {
         Ok(())
     }
 
+    async fn handle_queue(&mut self, key: crossterm::event::KeyEvent) -> Result<()> {
+        use crossterm::event::KeyCode;
+
+        let len = self.queue.len();
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => self.mode = AppMode::Normal,
+            KeyCode::Down | KeyCode::Char('j') => {
+                if len > 0 {
+                    let next = self
+                        .queue_state
+                        .selected()
+                        .map(|index| (index + 1).min(len - 1))
+                        .unwrap_or(0);
+                    self.queue_state.select(Some(next));
+                }
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if len > 0 {
+                    let previous = self
+                        .queue_state
+                        .selected()
+                        .map(|index| index.saturating_sub(1))
+                        .unwrap_or(0);
+                    self.queue_state.select(Some(previous));
+                }
+            }
+            KeyCode::Char('g') => {
+                if len > 0 {
+                    self.queue_state.select(Some(0));
+                }
+            }
+            KeyCode::Char('G') => {
+                if len > 0 {
+                    self.queue_state.select(Some(len - 1));
+                }
+            }
+            KeyCode::Char('r') => {
+                if self.queue_running {
+                    self.notice = Some("Queue is already running".to_string());
+                } else if self
+                    .queue
+                    .iter()
+                    .any(|item| matches!(item.status, QueueStatus::Pending | QueueStatus::Failed))
+                {
+                    self.start_queue();
+                    self.notice = Some("Queue started".to_string());
+                } else {
+                    self.notice = Some("No pending tasks".to_string());
+                }
+            }
+            KeyCode::Char('c') => {
+                let before = self.queue.len();
+                self.queue.retain(|item| item.status != QueueStatus::Done);
+                self.notice = Some(format!(
+                    "Cleared {} finished task(s)",
+                    before - self.queue.len()
+                ));
+                self.fix_queue_selection();
+                save_queue(&self.queue);
+            }
+            KeyCode::Char('d') => {
+                if let Some(index) = self.queue_state.selected() {
+                    match self.queue.get(index) {
+                        Some(item) if item.status == QueueStatus::Running => {
+                            self.notice = Some("Cannot remove a running task".to_string());
+                        }
+                        Some(_) => {
+                            self.queue.remove(index);
+                            self.fix_queue_selection();
+                            save_queue(&self.queue);
+                        }
+                        None => {}
+                    }
+                }
+            }
+            KeyCode::Char('u') => {
+                if let Some(index) = self.queue_state.selected() {
+                    if index > 0 && index < self.queue.len() {
+                        self.queue.swap(index, index - 1);
+                        self.queue_state.select(Some(index - 1));
+                        save_queue(&self.queue);
+                    }
+                }
+            }
+            KeyCode::Char('o') => {
+                if let Some(index) = self.queue_state.selected() {
+                    if index + 1 < self.queue.len() {
+                        self.queue.swap(index, index + 1);
+                        self.queue_state.select(Some(index + 1));
+                        save_queue(&self.queue);
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn fix_queue_selection(&mut self) {
+        if self.queue.is_empty() {
+            self.queue_state.select(None);
+            *self.queue_state.offset_mut() = 0;
+        } else {
+            let selected = self
+                .queue_state
+                .selected()
+                .unwrap_or(0)
+                .min(self.queue.len() - 1);
+            self.queue_state.select(Some(selected));
+        }
+    }
+
     async fn delete_selected(&mut self) -> Result<()> {
         let paths = self.target_paths();
         if paths.is_empty() {
@@ -1792,6 +2025,63 @@ fn dir_title(path: &Path) -> String {
         .and_then(|name| name.to_str())
         .map(|name| name.to_string())
         .unwrap_or_else(|| path.display().to_string())
+}
+
+async fn execute_queue_item(item: &QueueItem) -> std::result::Result<(), String> {
+    if item.src == item.dst {
+        return Err("source and destination are identical".to_string());
+    }
+    if !item.src.exists() {
+        return Err("source no longer exists".to_string());
+    }
+    if item.dst.exists() {
+        if !item.overwrite {
+            return Err(format!(
+                "destination already exists: {}",
+                item.dst.display()
+            ));
+        }
+        let removal = if item.dst.is_dir() {
+            tokio::fs::remove_dir_all(&item.dst).await
+        } else {
+            tokio::fs::remove_file(&item.dst).await
+        };
+        removal.map_err(|error| format!("cannot replace destination: {error}"))?;
+    }
+
+    match item.op.as_str() {
+        "copy" => copy_path(&item.src, &item.dst).await,
+        "move" => move_path(&item.src, &item.dst).await,
+        other => Err(format!("unknown operation: {other}")),
+    }
+}
+
+async fn copy_path(src: &Path, dst: &Path) -> std::result::Result<(), String> {
+    if src.is_dir() {
+        copy_dir(src, dst).await.map_err(|error| error.to_string())
+    } else {
+        tokio::fs::copy(src, dst)
+            .await
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+}
+
+async fn move_path(src: &Path, dst: &Path) -> std::result::Result<(), String> {
+    match tokio::fs::rename(src, dst).await {
+        Ok(()) => Ok(()),
+        Err(_) => {
+            // `rename` fails across filesystems (EXDEV). Fall back to a real
+            // copy followed by removing the source.
+            copy_path(src, dst).await?;
+            let removal = if src.is_dir() {
+                tokio::fs::remove_dir_all(src).await
+            } else {
+                tokio::fs::remove_file(src).await
+            };
+            removal.map_err(|error| format!("copied but could not remove source: {error}"))
+        }
+    }
 }
 
 async fn copy_dir(src: &Path, dst: &Path) -> Result<()> {

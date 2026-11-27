@@ -31,9 +31,13 @@ struct Args {
     #[arg(long)]
     generate_config: bool,
 
-    /// List built-in color themes
+    /// List built-in color themes with previews and mark the active one
     #[arg(long)]
     themes: bool,
+
+    /// Set the color theme (use --themes to list names)
+    #[arg(long, value_name = "NAME", num_args = 0..=1, default_missing_value = "")]
+    theme: Option<String>,
 
     /// Show help
     #[arg(short, long)]
@@ -42,6 +46,13 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Rust ignores SIGPIPE by default, which turns `rfn --themes | head` into
+    // a panic/abort. Restore the normal Unix behavior for command-line output.
+    #[cfg(unix)]
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+
     let args = Args::parse();
 
     if args.help {
@@ -55,8 +66,15 @@ async fn main() -> Result<()> {
     }
 
     if args.themes {
-        for theme in crate::config::ColorConfig::THEMES {
-            println!("{theme}");
+        print_themes(&current_theme());
+        return Ok(());
+    }
+
+    if let Some(theme) = args.theme {
+        if theme.is_empty() {
+            print_themes(&current_theme());
+        } else {
+            set_theme(&theme)?;
         }
         return Ok(());
     }
@@ -89,6 +107,189 @@ async fn main() -> Result<()> {
     result
 }
 
+fn color_enabled() -> bool {
+    use std::io::IsTerminal;
+    io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none()
+}
+
+fn hex_rgb(hex: &str) -> Option<(u8, u8, u8)> {
+    let hex = hex.strip_prefix('#')?;
+    if hex.len() != 6 {
+        return None;
+    }
+    let red = u8::from_str_radix(&hex[0..2], 16).ok()?;
+    let green = u8::from_str_radix(&hex[2..4], 16).ok()?;
+    let blue = u8::from_str_radix(&hex[4..6], 16).ok()?;
+    Some((red, green, blue))
+}
+
+fn ansi_fg(hex: &str) -> String {
+    match hex_rgb(hex) {
+        Some((red, green, blue)) => format!("\x1b[38;2;{red};{green};{blue}m"),
+        None => String::new(),
+    }
+}
+
+fn ansi_bg(hex: &str) -> String {
+    match hex_rgb(hex) {
+        Some((red, green, blue)) => format!("\x1b[48;2;{red};{green};{blue}m"),
+        None => String::new(),
+    }
+}
+
+fn theme_swatches(colors: &crate::config::ColorConfig) -> String {
+    let entries = [
+        ("bg", &colors.bg),
+        ("fg", &colors.fg),
+        ("accent", &colors.accent),
+        ("dir", &colors.dir),
+        ("exec", &colors.exec),
+        ("link", &colors.symlink),
+        ("added", &colors.git_added),
+        ("deleted", &colors.git_deleted),
+    ];
+
+    if !color_enabled() {
+        return entries
+            .iter()
+            .map(|(label, hex)| format!("{label} {hex}"))
+            .collect::<Vec<_>>()
+            .join("  ");
+    }
+
+    entries
+        .iter()
+        .map(|(label, hex)| {
+            format!(
+                "{}{} {}\x1b[0m",
+                ansi_fg(&colors.muted),
+                label,
+                format!("{}{}", ansi_fg(hex), "███")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("  ")
+}
+
+fn theme_sample(colors: &crate::config::ColorConfig) -> String {
+    if !color_enabled() {
+        return "src/  README.md  install.sh  link  M app.rs".to_string();
+    }
+
+    let mut out = ansi_bg(&colors.bg);
+    out.push_str(&ansi_fg(&colors.dir));
+    out.push_str("src/");
+    out.push_str(&ansi_fg(&colors.fg));
+    out.push_str("  README.md");
+    out.push_str(&ansi_fg(&colors.exec));
+    out.push_str("  install.sh");
+    out.push_str(&ansi_fg(&colors.symlink));
+    out.push_str("  link");
+    out.push_str(&ansi_fg(&colors.git_modified));
+    out.push_str("  M app.rs");
+    out.push_str("\x1b[0m");
+    out
+}
+
+fn current_theme() -> String {
+    AppConfig::load()
+        .map(|config| config.ui.theme)
+        .unwrap_or_else(|_| "tokyo-night".to_string())
+}
+
+fn print_themes(current: &str) {
+    println!("rfn built-in themes\n");
+
+    let mut found_current = false;
+    for name in crate::config::ColorConfig::THEMES {
+        let Some(colors) = crate::config::ColorConfig::preset(name) else {
+            continue;
+        };
+        let active = name == current;
+        found_current |= active;
+        println!(
+            "  {} {:<18}{}",
+            if active { "*" } else { " " },
+            name,
+            if active { " (active)" } else { "" }
+        );
+        println!("      {}", theme_swatches(&colors));
+        println!("      {}", theme_sample(&colors));
+        println!();
+    }
+
+    if !found_current {
+        if current == "custom" {
+            println!("  Active theme: custom (uses [ui.colors] from the config)\n");
+        } else {
+            println!("  Active theme: {current} (not a built-in theme)\n");
+        }
+    }
+
+    println!("Set one with: rfn --theme <name>");
+}
+
+fn set_theme(name: &str) -> Result<()> {
+    use anyhow::Context;
+
+    let preset = crate::config::ColorConfig::preset(name);
+    if preset.is_none() && name != "custom" {
+        eprintln!("error: unknown theme '{name}'");
+        eprintln!(
+            "available themes: {}",
+            crate::config::ColorConfig::THEMES.join(", ")
+        );
+        eprintln!("run `rfn --themes` to preview them");
+        std::process::exit(2);
+    }
+
+    let path = dirs::config_dir()
+        .ok_or_else(|| anyhow::anyhow!("cannot find a config directory"))?
+        .join("rfn")
+        .join("config.toml");
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    if path.exists() {
+        let text = std::fs::read_to_string(&path)?;
+        let mut value: toml::Value = toml::from_str(&text)
+            .with_context(|| format!("cannot parse {}", path.display()))?;
+        let table = value
+            .as_table_mut()
+            .ok_or_else(|| anyhow::anyhow!("config root is not a table"))?;
+        let ui = table
+            .entry("ui")
+            .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
+        let ui = ui
+            .as_table_mut()
+            .ok_or_else(|| anyhow::anyhow!("ui is not a table in the config"))?;
+        ui.insert(
+            "theme".to_string(),
+            toml::Value::String(name.to_string()),
+        );
+        std::fs::write(&path, toml::to_string_pretty(&value)?)?;
+    } else {
+        let mut config = AppConfig::default();
+        config.ui.theme = name.to_string();
+        if let Some(colors) = preset.clone() {
+            config.ui.colors = colors;
+        }
+        std::fs::write(&path, toml::to_string_pretty(&config)?)?;
+    }
+
+    println!("Theme set to {name}");
+    match preset {
+        Some(colors) => {
+            println!("  {}", theme_swatches(&colors));
+            println!("  {}", theme_sample(&colors));
+        }
+        None => println!("  custom: edit [ui.colors] in the config below"),
+    }
+    println!("\nConfig: {}", path.display());
+    Ok(())
+}
+
 fn print_help() {
     println!(r#"rfn - A minimal async terminal file manager
 
@@ -101,6 +302,8 @@ ARGS:
 OPTIONS:
     -h, --help              Print help
         --generate-config   Generate default config file to stdout
+        --themes            List themes with color previews and mark the active one
+        --theme <NAME>      Set the theme in ~/.config/rfn/config.toml
 
 KEYBINDINGS:
     Navigation:
@@ -120,16 +323,32 @@ KEYBINDINGS:
         n               New file
         N / Shift+n     New directory
         r               Rename
-        d / Delete      Delete
+        d / Delete      Delete (trash by default)
         y               Copy (yank)
         x               Cut
-        p               Paste
+        p               Paste (queued in the background)
+        Q               Open the transfer queue
+        T               Trash browser
+        o               Open with...
+        b               Bulk rename marked files
+
+    Selection:
+        v               Visual mode
+        Space           Toggle mark
+        Esc             Leave visual mode / clear marks
+
+    Tabs:
+        t               New tab
+        Ctrl+w          Close tab
+        Tab / Shift+Tab Next / previous tab
 
     View:
         .               Toggle hidden files
         P               Toggle preview
         g               Toggle git status
         R / Ctrl+r      Refresh
+        m / M           Add bookmark / jump to bookmark
+        J / K / 0       Scroll preview / reset
 
     Sorting:
         s               Cycle name -> size -> time -> extension
@@ -137,7 +356,6 @@ KEYBINDINGS:
 
     Other:
         /               Search
-        Esc             Clear search
         ?               Toggle help
         q / Ctrl+c      Quit
 "#);

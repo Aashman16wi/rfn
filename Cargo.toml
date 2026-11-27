@@ -53,15 +53,13 @@ anyhow = "1.0"
 thiserror = "1.0"
 opener = "0.6"
 trash = "5.4.0"
-
-poppler = { version = "0.6", optional = true }
-
+libc = "0.2"
 
 [features]
 default = []
 image-preview = []
-pdf-preview = ["poppler"]
-archive-preview = ["zip", "flate2", "xz2", "bzip2", "zstd"]
+pdf-preview = []
+archive-preview = ["zip", "tar", "flate2", "xz2", "bzip2", "zstd"]
 
 [profile.release]
 lto = true

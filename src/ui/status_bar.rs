@@ -188,6 +188,7 @@ fn mode_style(mode: AppMode, accent: Color) -> (&'static str, Color) {
         AppMode::Visual => ("VISUAL", Color::Rgb(224, 175, 104)),
         AppMode::TrashBrowser => ("TRASH", Color::Rgb(247, 118, 142)),
         AppMode::OpenWith => ("OPEN WITH", Color::Rgb(224, 175, 104)),
+        AppMode::QueueManager => ("QUEUE", Color::Rgb(152, 195, 121)),
     }
 }
 

@@ -44,6 +44,7 @@ pub enum Action {
     BookmarkJump,
     OpenTrash,
     OpenWith,
+    QueueManager,
 }
 
 pub struct KeyMapper {
@@ -94,6 +95,7 @@ impl KeyMapper {
         Self::add_keys(&mut map, &config.bookmark_jump, Action::BookmarkJump);
         Self::add_keys(&mut map, &config.trash, Action::OpenTrash);
         Self::add_keys(&mut map, &config.open_with, Action::OpenWith);
+        Self::add_keys(&mut map, &config.queue, Action::QueueManager);
 
         Self { map }
     }

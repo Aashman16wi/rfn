@@ -7,13 +7,6 @@ pub struct SessionState {
 }
 
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct QueueItem {
-    pub op: String,  // "copy" or "move"
-    pub src: PathBuf,
-    pub dst: PathBuf,
-}
-
 pub fn queue_dir() -> PathBuf {
     state_dir().join("queue")
 }
@@ -23,7 +16,10 @@ fn queue_file() -> PathBuf {
 }
 
 pub fn load_queue() -> Vec<QueueItem> {
-    let text = std::fs::read_to_string(queue_file()).ok()?;
+    let text = match std::fs::read_to_string(queue_file()) {
+        Ok(t) => t,
+        Err(_) => return Vec::new(),
+    };
     let mut items = Vec::new();
     for line in text.lines() {
         if let Some(rest) = line.strip_prefix("item=") {
@@ -33,6 +29,9 @@ pub fn load_queue() -> Vec<QueueItem> {
                     op: parts[0].to_string(),
                     src: PathBuf::from(parts[1]),
                     dst: PathBuf::from(parts[2]),
+                    status: QueueStatus::Pending,
+                    overwrite: false,
+                    error: None,
                 });
             }
         }
@@ -47,8 +46,12 @@ pub fn save_queue(items: &[QueueItem]) {
     }
     let mut text = String::new();
     for item in items {
-        text.push_str(&format!("item={}|{}|{}
-", item.op, item.src.display(), item.dst.display()));
+        // Completed work is not restored; failed and pending tasks are kept
+        // so a restart does not silently lose them.
+        if !matches!(item.status, QueueStatus::Pending | QueueStatus::Failed) {
+            continue;
+        }
+        text.push_str(&format!("item={}|{}|{}\n", item.op, item.src.display(), item.dst.display()));
     }
     let _ = std::fs::write(queue_file(), text);
 }
@@ -130,4 +133,21 @@ pub fn save(tabs: &[&Path], active: usize, bookmarks: &[PathBuf]) {
 }
 
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QueueStatus {
+    Pending,
+    Running,
+    Done,
+    Failed,
+}
+
+#[derive(Debug, Clone)]
+pub struct QueueItem {
+    pub op: String,
+    pub src: std::path::PathBuf,
+    pub dst: std::path::PathBuf,
+    pub status: QueueStatus,
+    pub overwrite: bool,
+    pub error: Option<String>,
+}
+

@@ -1,4 +1,6 @@
-use crate::types::{FileEntry, PreviewContent};
+use crate::types::{FileEntry, FileType, PreviewContent};
+use crate::icons::get_icon;
+use tar::Archive;
 use anyhow::Result;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -14,9 +16,10 @@ pub async fn generate_preview(
     entry: &FileEntry,
     max_size: u64,
     show_images: bool,
+    show_icons: bool,
 ) -> Result<PreviewContent> {
     if entry.is_dir() {
-        return Ok(read_dir_preview(&entry.path).await);
+        return Ok(read_dir_preview(&entry.path, show_icons).await);
     }
 
     if entry.size > max_size {
@@ -217,7 +220,7 @@ async fn read_text_preview(path: &Path) -> Result<PreviewContent> {
     Ok(PreviewContent::text(text))
 }
 
-async fn read_dir_preview(path: &Path) -> PreviewContent {
+async fn read_dir_preview(path: &Path, show_icons: bool) -> PreviewContent {
     let path = path.to_path_buf();
     let result = tokio::task::spawn_blocking(move || {
         let reader = match std::fs::read_dir(&path) {
@@ -225,32 +228,53 @@ async fn read_dir_preview(path: &Path) -> PreviewContent {
             Err(e) => return format!("Cannot read directory: {e}"),
         };
 
-        let mut dirs: Vec<String> = Vec::new();
-        let mut files: Vec<(String, u64)> = Vec::new();
+        let mut dirs: Vec<(String, String)> = Vec::new();
+        let mut files: Vec<(String, String, u64)> = Vec::new();
 
         for entry in reader.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
-            let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
-            if is_dir {
-                dirs.push(name);
+            let file_type = match entry.file_type() {
+                Ok(ft) if ft.is_dir() => FileType::Directory,
+                Ok(ft) if ft.is_symlink() => FileType::Symlink,
+                _ => FileType::File,
+            };
+            let icon = if show_icons {
+                get_icon(&entry.path(), file_type, true).to_string()
+            } else {
+                String::new()
+            };
+
+            if file_type == FileType::Directory {
+                dirs.push((icon, name));
             } else {
                 let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
-                files.push((name, size));
+                files.push((icon, name, size));
             }
         }
 
-        dirs.sort_by_key(|n| n.to_lowercase());
-        files.sort_by_key(|(n, _)| n.to_lowercase());
+        dirs.sort_by_key(|(_, name)| name.to_lowercase());
+        files.sort_by_key(|(_, name, _)| name.to_lowercase());
 
         let total = dirs.len() + files.len();
         let mut out = String::new();
         out.push_str(&format!("{total} items\n\n"));
 
-        for name in dirs.iter().take(MAX_DIR_ENTRIES) {
-            out.push_str(&format!("▸ {name}/\n"));
+        for (icon, name) in dirs.iter().take(MAX_DIR_ENTRIES) {
+            if icon.is_empty() {
+                out.push_str(&format!("▸ {name}/\n"));
+            } else {
+                out.push_str(&format!("{icon} {name}/\n"));
+            }
         }
-        for (name, size) in files.iter().take(MAX_DIR_ENTRIES.saturating_sub(dirs.len())) {
-            out.push_str(&format!("  {name}  {}\n", format_size(*size)));
+        for (icon, name, size) in files
+            .iter()
+            .take(MAX_DIR_ENTRIES.saturating_sub(dirs.len()))
+        {
+            if icon.is_empty() {
+                out.push_str(&format!("  {name}  {}\n", format_size(*size)));
+            } else {
+                out.push_str(&format!("{icon} {name}  {}\n", format_size(*size)));
+            }
         }
 
         if total > MAX_DIR_ENTRIES {
@@ -392,7 +416,7 @@ fn list_zip(path: &Path) -> String {
 }
 
 fn list_tar<R: std::io::Read>(reader: R) -> String {
-    let mut archive = tar::Archive::new(reader);
+    let mut archive = Archive::new(reader);
     let entries = match archive.entries() {
         Ok(e) => e,
         Err(e) => return format!("Cannot read tar: {e}"),
