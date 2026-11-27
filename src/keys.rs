@@ -45,6 +45,7 @@ pub enum Action {
     OpenTrash,
     OpenWith,
     QueueManager,
+    ThemePicker,
 }
 
 pub struct KeyMapper {
@@ -96,6 +97,7 @@ impl KeyMapper {
         Self::add_keys(&mut map, &config.trash, Action::OpenTrash);
         Self::add_keys(&mut map, &config.open_with, Action::OpenWith);
         Self::add_keys(&mut map, &config.queue, Action::QueueManager);
+        Self::add_keys(&mut map, &config.theme, Action::ThemePicker);
 
         Self { map }
     }

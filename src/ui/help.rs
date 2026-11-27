@@ -83,6 +83,15 @@ pub fn render(frame: &mut Frame, area: Rect, _keys: &KeyConfig, colors: &ColorCo
                 ("p", "Paste"),
             ],
         ),
+        (
+            "Queue & tools",
+            vec![
+                ("Q", "Transfer queue (r/c/d/u/o)"),
+                ("T", "Trash browser"),
+                ("o", "Open with..."),
+                ("Ctrl+t", "Change theme"),
+            ],
+        ),
     ];
 
     let right_sections = vec![

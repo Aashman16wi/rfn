@@ -25,6 +25,7 @@ pub fn render(
     sort_by: SortBy,
     reverse_sort: bool,
     search_query: &str,
+    theme: &str,
     colors: &ColorConfig,
 ) {
     let bg = parse_color(&colors.status_bg);
@@ -136,6 +137,15 @@ pub fn render(
     let arrow = if reverse_sort { "↑" } else { "↓" };
 
     let mut right: Vec<Span> = Vec::new();
+    if !theme.is_empty() {
+        right.push(Span::styled(
+            format!(" {theme} "),
+            Style::default()
+                .bg(parse_color(&colors.border))
+                .fg(muted),
+        ));
+        right.push(Span::raw(" "));
+    }
     for flag in &flags {
         right.push(Span::styled(
             format!(" {flag} "),
@@ -189,6 +199,7 @@ fn mode_style(mode: AppMode, accent: Color) -> (&'static str, Color) {
         AppMode::TrashBrowser => ("TRASH", Color::Rgb(247, 118, 142)),
         AppMode::OpenWith => ("OPEN WITH", Color::Rgb(224, 175, 104)),
         AppMode::QueueManager => ("QUEUE", Color::Rgb(152, 195, 121)),
+        AppMode::ThemePicker => ("THEME", Color::Rgb(187, 154, 247)),
     }
 }
 

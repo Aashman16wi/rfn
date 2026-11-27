@@ -5,6 +5,7 @@ pub mod preview;
 pub mod prompt;
 pub mod queue;
 pub mod status_bar;
+pub mod theme_picker;
 pub mod top_bar;
 
 use ratatui::{

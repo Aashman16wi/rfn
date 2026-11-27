@@ -9,6 +9,8 @@ pub enum ConfigError {
     Config(#[from] config::ConfigError),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("toml error: {0}")]
+    Toml(#[from] toml::ser::Error),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -140,6 +142,7 @@ pub struct KeyConfig {
     pub trash: Vec<String>,
     pub open_with: Vec<String>,
     pub queue: Vec<String>,
+    pub theme: Vec<String>,
 }
 
 impl Default for AppConfig {
@@ -309,11 +312,67 @@ impl Default for KeyConfig {
             trash: vec!["T".into()],
             open_with: vec!["o".into()],
             queue: vec!["Q".into()],
+            theme: vec!["ctrl+t".into()],
         }
     }
 }
 
 impl AppConfig {
+    /// Path of the user config file.
+    pub fn config_path() -> std::path::PathBuf {
+        config_dir()
+            .unwrap_or_else(|| std::env::temp_dir())
+            .join("rfn")
+            .join("config.toml")
+    }
+
+    /// Persist the selected theme, keeping every other setting untouched.
+    pub fn save_theme(name: &str) -> Result<std::path::PathBuf, ConfigError> {
+        let path = Self::config_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        if path.exists() {
+            let text = std::fs::read_to_string(&path)?;
+            let mut value: toml::Value = toml::from_str(&text).map_err(|error| {
+                ConfigError::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("cannot parse {}: {error}", path.display()),
+                ))
+            })?;
+            let table = value.as_table_mut().ok_or_else(|| {
+                ConfigError::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "config root is not a table",
+                ))
+            })?;
+            let ui = table
+                .entry("ui")
+                .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
+            let ui = ui.as_table_mut().ok_or_else(|| {
+                ConfigError::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "ui is not a table in the config",
+                ))
+            })?;
+            ui.insert(
+                "theme".to_string(),
+                toml::Value::String(name.to_string()),
+            );
+            std::fs::write(&path, toml::to_string_pretty(&value)?)?;
+        } else {
+            let mut config = AppConfig::default();
+            config.ui.theme = name.to_string();
+            if let Some(colors) = ColorConfig::preset(name) {
+                config.ui.colors = colors;
+            }
+            std::fs::write(&path, toml::to_string_pretty(&config)?)?;
+        }
+
+        Ok(path)
+    }
+
     pub fn load() -> Result<Self, ConfigError> {
         let mut builder = Config::builder()
             .set_default("ui.show_icons", true)?
@@ -391,7 +450,8 @@ impl AppConfig {
             .set_default("keys.bookmark_jump", vec!["M"])?
             .set_default("keys.trash", vec!["T"])?
             .set_default("keys.open_with", vec!["o"])?
-            .set_default("keys.queue", vec!["Q"])?;
+            .set_default("keys.queue", vec!["Q"])?
+            .set_default("keys.theme", vec!["ctrl+t"])?;
 
         if let Some(config_dir) = config_dir() {
             let config_path = config_dir.join("rfn").join("config.toml");

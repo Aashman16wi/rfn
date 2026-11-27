@@ -152,12 +152,45 @@ sort = ["s"]
 | `q` / `Ctrl+c` | Quit |
 | `m` / `M` | Bookmark dir / jump to bookmark |
 | `J` / `K` | Preview scroll down / up |
+| `=` / `-` | Preview zoom in / out |
 | `0` | Reset preview |
 | `T` | Trash browser |
 | `o` | Open with command |
-| `Q` | Queue manager |
+| `Q` | Transfer queue (see below) |
+| `Ctrl+t` | Change theme without restarting |
 
 Mouse wheel scrolls and left click selects.
+
+### Transfer queue
+
+`y` / `x` yank and cut files, `p` turns them into transfer tasks that run in the
+background, and `Q` opens the queue manager:
+
+| Key | Action in queue |
+|-----|-----------------|
+| `j` / `k` | Move selection |
+| `r` | Run pending / failed tasks |
+| `c` | Clear finished tasks |
+| `d` | Remove selected task |
+| `u` / `o` | Move task up / down |
+| `Esc` | Close |
+
+Tasks show `PEND`, `RUN`, `DONE` or `FAIL` and survive a restart, so a failed
+copy can be retried later.
+
+### Themes
+
+Four built-in themes ship with rfn: `tokyo-night` (default), `catppuccin-mocha`,
+`gruvbox-dark` and `nord`.
+
+```bash
+rfn --themes           # list themes with color previews, marks the active one
+rfn --theme nord       # switch theme and save it to the config
+rfn --theme            # same as --themes
+```
+
+Inside the TUI, `Ctrl+t` opens a picker that applies a theme immediately and
+saves the choice. The active theme is shown in the status bar.
 
 ## Limitations
 

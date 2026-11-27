@@ -120,6 +120,7 @@ pub struct App {
 
     mode: AppMode,
     overwrite_count: usize,
+    theme_index: usize,
     search_query: String,
     rename_buffer: String,
     new_name_buffer: String,
@@ -190,6 +191,7 @@ impl App {
             git_root: None,
             mode: AppMode::Normal,
             overwrite_count: 0,
+            theme_index: 0,
             search_query: String::new(),
             rename_buffer: String::new(),
             new_name_buffer: String::new(),
@@ -759,6 +761,7 @@ impl App {
             self.sort_by,
             self.reverse_sort,
             &self.search_query,
+            &self.config.ui.theme,
             colors,
         );
 
@@ -837,6 +840,15 @@ impl App {
                     &self.config.ui.colors,
                 );
             }
+            AppMode::ThemePicker => {
+                crate::ui::theme_picker::render(
+                    frame,
+                    area,
+                    self.theme_index,
+                    &self.config.ui.theme,
+                    &self.config.ui.colors,
+                );
+            }
             _ => {}
         }
     }
@@ -868,6 +880,7 @@ impl App {
                     AppMode::TrashBrowser => self.handle_trash(key).await?,
                     AppMode::OpenWith => self.handle_open_with(key).await?,
                     AppMode::QueueManager => self.handle_queue(key).await?,
+                    AppMode::ThemePicker => self.handle_theme_picker(key),
                 }
             }
             Event::Mouse(mouse) => {
@@ -1138,6 +1151,13 @@ impl App {
                     } else {
                         self.queue_state.select(Some(0));
                     }
+                }
+                Action::ThemePicker => {
+                    self.theme_index = crate::config::ColorConfig::THEMES
+                        .iter()
+                        .position(|name| *name == self.config.ui.theme)
+                        .unwrap_or(0);
+                    self.mode = AppMode::ThemePicker;
                 }
             }
         }
@@ -1965,6 +1985,48 @@ impl App {
                 .unwrap_or(0)
                 .min(self.queue.len() - 1);
             self.queue_state.select(Some(selected));
+        }
+    }
+
+    /// Theme picker: j/k to move, Enter to apply, Esc to cancel.
+    fn handle_theme_picker(&mut self, key: crossterm::event::KeyEvent) {
+        use crossterm::event::KeyCode;
+
+        let count = crate::config::ColorConfig::THEMES.len();
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => self.mode = AppMode::Normal,
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.theme_index = self.theme_index.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.theme_index = (self.theme_index + 1).min(count.saturating_sub(1));
+            }
+            KeyCode::Home => self.theme_index = 0,
+            KeyCode::End => self.theme_index = count.saturating_sub(1),
+            KeyCode::Enter => {
+                if let Some(name) = crate::config::ColorConfig::THEMES.get(self.theme_index) {
+                    self.apply_theme(name);
+                }
+                self.mode = AppMode::Normal;
+            }
+            _ => {}
+        }
+    }
+
+    /// Switch theme immediately and remember the choice for next launch.
+    fn apply_theme(&mut self, name: &str) {
+        let Some(colors) = crate::config::ColorConfig::preset(name) else {
+            return;
+        };
+        self.config.ui.theme = name.to_string();
+        self.config.ui.colors = colors;
+
+        match crate::config::AppConfig::save_theme(name) {
+            Ok(path) => self.notice = Some(format!(
+                "Theme: {name} (saved to {})",
+                path.display()
+            )),
+            Err(error) => self.notice = Some(format!("Theme: {name} (not saved: {error})")),
         }
     }
 

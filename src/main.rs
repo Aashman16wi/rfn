@@ -230,8 +230,6 @@ fn print_themes(current: &str) {
 }
 
 fn set_theme(name: &str) -> Result<()> {
-    use anyhow::Context;
-
     let preset = crate::config::ColorConfig::preset(name);
     if preset.is_none() && name != "custom" {
         eprintln!("error: unknown theme '{name}'");
@@ -243,40 +241,7 @@ fn set_theme(name: &str) -> Result<()> {
         std::process::exit(2);
     }
 
-    let path = dirs::config_dir()
-        .ok_or_else(|| anyhow::anyhow!("cannot find a config directory"))?
-        .join("rfn")
-        .join("config.toml");
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    if path.exists() {
-        let text = std::fs::read_to_string(&path)?;
-        let mut value: toml::Value = toml::from_str(&text)
-            .with_context(|| format!("cannot parse {}", path.display()))?;
-        let table = value
-            .as_table_mut()
-            .ok_or_else(|| anyhow::anyhow!("config root is not a table"))?;
-        let ui = table
-            .entry("ui")
-            .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
-        let ui = ui
-            .as_table_mut()
-            .ok_or_else(|| anyhow::anyhow!("ui is not a table in the config"))?;
-        ui.insert(
-            "theme".to_string(),
-            toml::Value::String(name.to_string()),
-        );
-        std::fs::write(&path, toml::to_string_pretty(&value)?)?;
-    } else {
-        let mut config = AppConfig::default();
-        config.ui.theme = name.to_string();
-        if let Some(colors) = preset.clone() {
-            config.ui.colors = colors;
-        }
-        std::fs::write(&path, toml::to_string_pretty(&config)?)?;
-    }
+    let path = AppConfig::save_theme(name)?;
 
     println!("Theme set to {name}");
     match preset {
@@ -339,8 +304,9 @@ KEYBINDINGS:
 
     Tabs:
         t               New tab
-        Ctrl+w          Close tab
+        w               Close tab
         Tab / Shift+Tab Next / previous tab
+        1 - 9           Jump to tab
 
     View:
         .               Toggle hidden files
@@ -349,6 +315,7 @@ KEYBINDINGS:
         R / Ctrl+r      Refresh
         m / M           Add bookmark / jump to bookmark
         J / K / 0       Scroll preview / reset
+        Ctrl+t          Change theme (in-app picker)
 
     Sorting:
         s               Cycle name -> size -> time -> extension

@@ -124,6 +124,7 @@ pub enum AppMode {
     TrashBrowser,
     OpenWith,
     QueueManager,
+    ThemePicker,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
