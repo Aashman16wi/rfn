@@ -34,7 +34,8 @@ use tokio::sync::mpsc;
 /// Progress messages sent from the background queue worker back to the UI.
 #[derive(Debug)]
 enum QueueEvent {
-    Finished(usize, std::result::Result<(), String>),
+    /// The task id (not the index) and the outcome of the work.
+    Finished(u64, std::result::Result<(), String>),
     AllDone,
 }
 
@@ -156,6 +157,8 @@ pub struct App {
     clipboard: ClipboardOp,
     clipboard_paths: Vec<PathBuf>,
     queue: Vec<QueueItem>,
+    /// Counter for the stable task ids.
+    next_queue_id: u64,
     queue_state: ratatui::widgets::ListState,
     queue_rx: Option<mpsc::UnboundedReceiver<QueueEvent>>,
     queue_running: bool,
@@ -236,6 +239,7 @@ impl App {
             clipboard: ClipboardOp::None,
             clipboard_paths: Vec::new(),
             queue: load_queue(),
+            next_queue_id: 0,
             queue_state: ratatui::widgets::ListState::default(),
             queue_rx: None,
             queue_running: false,
@@ -256,6 +260,12 @@ impl App {
             should_quit: false,
             last_tick: std::time::Instant::now(),
         };
+
+        // Restored tasks need fresh ids, they are unique per session.
+        for item in app.queue.iter_mut() {
+            item.id = app.next_queue_id;
+            app.next_queue_id += 1;
+        }
 
         // The first listing is awaited so the very first frame is complete;
         // every later refresh happens in the background.
@@ -1863,6 +1873,7 @@ impl App {
                 continue;
             }
             self.queue.push(QueueItem {
+                id: self.next_queue_id,
                 op: op.to_string(),
                 src: src.clone(),
                 dst,
@@ -1870,6 +1881,7 @@ impl App {
                 overwrite,
                 error: None,
             });
+            self.next_queue_id += 1;
             added += 1;
         }
 
@@ -1893,20 +1905,21 @@ impl App {
             return;
         }
 
-        let tasks: Vec<(usize, QueueItem)> = self
+        let tasks: Vec<(u64, QueueItem)> = self
             .queue
             .iter()
-            .enumerate()
-            .filter(|(_, item)| matches!(item.status, QueueStatus::Pending | QueueStatus::Failed))
-            .map(|(index, item)| (index, item.clone()))
+            .filter(|item| matches!(item.status, QueueStatus::Pending | QueueStatus::Failed))
+            .map(|item| (item.id, item.clone()))
             .collect();
         if tasks.is_empty() {
             return;
         }
 
-        for (index, _) in &tasks {
-            self.queue[*index].status = QueueStatus::Running;
-            self.queue[*index].error = None;
+        for (id, _) in &tasks {
+            if let Some(item) = self.queue.iter_mut().find(|item| item.id == *id) {
+                item.status = QueueStatus::Running;
+                item.error = None;
+            }
         }
 
         let (tx, rx) = mpsc::unbounded_channel();
@@ -1914,9 +1927,9 @@ impl App {
         self.queue_running = true;
 
         tokio::spawn(async move {
-            for (index, item) in tasks {
+            for (id, item) in tasks {
                 let result = execute_queue_item(&item).await;
-                let _ = tx.send(QueueEvent::Finished(index, result));
+                let _ = tx.send(QueueEvent::Finished(id, result));
             }
             let _ = tx.send(QueueEvent::AllDone);
         });
@@ -1924,8 +1937,10 @@ impl App {
 
     async fn handle_queue_event(&mut self, event: QueueEvent) -> Result<()> {
         match event {
-            QueueEvent::Finished(index, result) => {
-                if let Some(item) = self.queue.get_mut(index) {
+            QueueEvent::Finished(id, result) => {
+                // Look the task up by id: the list may have been reordered or
+                // shortened while the worker was busy.
+                if let Some(item) = self.queue.iter_mut().find(|item| item.id == id) {
                     match result {
                         Ok(()) => {
                             item.status = QueueStatus::Done;
@@ -2631,25 +2646,117 @@ async fn execute_queue_item(item: &QueueItem) -> std::result::Result<(), String>
     if !item.src.exists() {
         return Err("source no longer exists".to_string());
     }
-    if item.dst.exists() {
-        if !item.overwrite {
-            return Err(format!(
-                "destination already exists: {}",
-                item.dst.display()
-            ));
-        }
-        let removal = if item.dst.is_dir() {
-            tokio::fs::remove_dir_all(&item.dst).await
-        } else {
-            tokio::fs::remove_file(&item.dst).await
-        };
-        removal.map_err(|error| format!("cannot replace destination: {error}"))?;
+    if item.dst.exists() && !item.overwrite {
+        return Err(format!(
+            "destination already exists: {}",
+            item.dst.display()
+        ));
     }
 
     match item.op.as_str() {
-        "copy" => copy_path(&item.src, &item.dst).await,
-        "move" => move_path(&item.src, &item.dst).await,
+        "copy" => copy_over(item).await,
+        "move" => move_over(item).await,
         other => Err(format!("unknown operation: {other}")),
+    }
+}
+
+/// Copy to a scratch name first and only then put it in place. A copy that
+/// fails halfway through can therefore never destroy the file it replaces.
+async fn copy_over(item: &QueueItem) -> std::result::Result<(), String> {
+    let temp = temp_destination(&item.dst);
+
+    if let Err(error) = copy_path(&item.src, &temp).await {
+        let _ = remove_path(&temp).await;
+        return Err(error);
+    }
+
+    if item.dst.exists() {
+        remove_path(&item.dst)
+            .await
+            .map_err(|error| format!("cannot replace destination: {error}"))?;
+    }
+
+    if let Err(error) = tokio::fs::rename(&temp, &item.dst).await {
+        let _ = remove_path(&temp).await;
+        return Err(format!("cannot move the copy into place: {error}"));
+    }
+    Ok(())
+}
+
+/// Move the source. Renaming replaces a file in one step. A directory has to
+/// be swapped out, so the new one is built next to it first and only then put
+/// in place. Across filesystems the move falls back to copy + delete.
+async fn move_over(item: &QueueItem) -> std::result::Result<(), String> {
+    let destination_is_dir = item.dst.exists() && item.dst.is_dir();
+
+    if destination_is_dir {
+        // A rename cannot replace a directory, so the new folder is built
+        // under a scratch name first. The old one stays untouched until the
+        // copy is complete.
+        let temp = temp_destination(&item.dst);
+        if let Err(error) = copy_path(&item.src, &temp).await {
+            let _ = remove_path(&temp).await;
+            return Err(error);
+        }
+        remove_path(&item.dst)
+            .await
+            .map_err(|error| format!("cannot replace destination: {error}"))?;
+        if let Err(error) = tokio::fs::rename(&temp, &item.dst).await {
+            let _ = remove_path(&temp).await;
+            return Err(format!("cannot move the copy into place: {error}"));
+        }
+        remove_path(&item.src)
+            .await
+            .map_err(|error| format!("copied but could not remove source: {error}"))
+    } else {
+        match tokio::fs::rename(&item.src, &item.dst).await {
+            // Renaming over a file replaces it in one step.
+            Ok(()) => Ok(()),
+            Err(_) => {
+                // `rename` fails across filesystems (EXDEV). Fall back to a
+                // real copy followed by removing the source.
+                let temp = temp_destination(&item.dst);
+                if let Err(error) = copy_path(&item.src, &temp).await {
+                    let _ = remove_path(&temp).await;
+                    return Err(error);
+                }
+                if item.dst.exists() {
+                    remove_path(&item.dst)
+                        .await
+                        .map_err(|error| format!("cannot replace destination: {error}"))?;
+                }
+                if let Err(error) = tokio::fs::rename(&temp, &item.dst).await {
+                    let _ = remove_path(&temp).await;
+                    return Err(format!("cannot move the copy into place: {error}"));
+                }
+                remove_path(&item.src)
+                    .await
+                    .map_err(|error| format!("copied but could not remove source: {error}"))
+            }
+        }
+    }
+}
+
+/// A scratch name next to the destination, used while a copy is in flight.
+fn temp_destination(dst: &Path) -> PathBuf {
+    let name = dst
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| "task".to_string());
+    let temp_name = format!(".{name}.rfn-part");
+    match dst.parent() {
+        Some(parent) => parent.join(temp_name),
+        None => PathBuf::from(temp_name),
+    }
+}
+
+/// Remove a file, a directory or a symlink (symlinks are never followed).
+async fn remove_path(path: &Path) -> std::io::Result<()> {
+    let meta = tokio::fs::symlink_metadata(path).await?;
+    if meta.is_dir() {
+        tokio::fs::remove_dir_all(path).await
+    } else {
+        tokio::fs::remove_file(path).await
     }
 }
 
@@ -2661,23 +2768,6 @@ async fn copy_path(src: &Path, dst: &Path) -> std::result::Result<(), String> {
             .await
             .map(|_| ())
             .map_err(|error| error.to_string())
-    }
-}
-
-async fn move_path(src: &Path, dst: &Path) -> std::result::Result<(), String> {
-    match tokio::fs::rename(src, dst).await {
-        Ok(()) => Ok(()),
-        Err(_) => {
-            // `rename` fails across filesystems (EXDEV). Fall back to a real
-            // copy followed by removing the source.
-            copy_path(src, dst).await?;
-            let removal = if src.is_dir() {
-                tokio::fs::remove_dir_all(src).await
-            } else {
-                tokio::fs::remove_file(src).await
-            };
-            removal.map_err(|error| format!("copied but could not remove source: {error}"))
-        }
     }
 }
 

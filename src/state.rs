@@ -26,6 +26,8 @@ pub fn load_queue() -> Vec<QueueItem> {
             let parts: Vec<&str> = rest.splitn(3, '|').collect();
             if parts.len() == 3 {
                 items.push(QueueItem {
+                    // Ids are handed out again when the app starts.
+                    id: 0,
                     op: parts[0].to_string(),
                     src: PathBuf::from(parts[1]),
                     dst: PathBuf::from(parts[2]),
@@ -143,6 +145,10 @@ pub enum QueueStatus {
 
 #[derive(Debug, Clone)]
 pub struct QueueItem {
+    /// Stable identifier. The worker reports its result with this id, so
+    /// removing or reordering tasks while the queue runs cannot mix up the
+    /// statuses.
+    pub id: u64,
     pub op: String,
     pub src: std::path::PathBuf,
     pub dst: std::path::PathBuf,
