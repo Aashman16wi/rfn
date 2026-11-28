@@ -1,3 +1,4 @@
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 pub struct SessionState {
@@ -23,19 +24,25 @@ pub fn load_queue() -> Vec<QueueItem> {
     let mut items = Vec::new();
     for line in text.lines() {
         if let Some(rest) = line.strip_prefix("item=") {
-            let parts: Vec<&str> = rest.splitn(3, '|').collect();
-            if parts.len() == 3 {
-                items.push(QueueItem {
-                    // Ids are handed out again when the app starts.
-                    id: 0,
-                    op: parts[0].to_string(),
-                    src: PathBuf::from(parts[1]),
-                    dst: PathBuf::from(parts[2]),
-                    status: QueueStatus::Pending,
-                    overwrite: false,
-                    error: None,
-                });
+            // The paths are written in a form that cannot break the line,
+            // so a split on the separator is safe.
+            let parts: Vec<&str> = rest.split('|').collect();
+            if parts.len() < 3 {
+                continue;
             }
+            items.push(QueueItem {
+                // Ids are handed out again when the app starts.
+                id: 0,
+                op: parts[0].to_string(),
+                src: decode_path(parts[1]),
+                dst: decode_path(parts[2]),
+                // Work that was running when rfn stopped is done again.
+                status: QueueStatus::Pending,
+                // The last field says if the user allowed the destination
+                // to be replaced. Older files do not have it.
+                overwrite: parts.get(3).map(|value| *value == "1").unwrap_or(false),
+                error: None,
+            });
         }
     }
     items
@@ -48,14 +55,59 @@ pub fn save_queue(items: &[QueueItem]) {
     }
     let mut text = String::new();
     for item in items {
-        // Completed work is not restored; failed and pending tasks are kept
-        // so a restart does not silently lose them.
-        if !matches!(item.status, QueueStatus::Pending | QueueStatus::Failed) {
+        // Finished work is not restored. Work that is running or that
+        // failed is kept, so a restart does not silently lose it.
+        if item.status == QueueStatus::Done {
             continue;
         }
-        text.push_str(&format!("item={}|{}|{}\n", item.op, item.src.display(), item.dst.display()));
+        text.push_str(&format!(
+            "item={}|{}|{}|{}\n",
+            item.op,
+            encode_path(&item.src),
+            encode_path(&item.dst),
+            if item.overwrite { "1" } else { "0" }
+        ));
     }
     let _ = std::fs::write(queue_file(), text);
+}
+
+/// A path in a form that can be put in the queue file without breaking it.
+///
+/// A `|` or a line break in a file name would split the line in the wrong
+/// place, and a name that is not valid UTF-8 would be changed on the way.
+fn encode_path(path: &Path) -> String {
+    let mut out = String::new();
+    for byte in path.as_os_str().as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => {
+                out.push(*byte as char);
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
+/// The path that `encode_path` wrote.
+fn decode_path(text: &str) -> PathBuf {
+    use std::os::unix::ffi::OsStrExt;
+
+    let bytes = text.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            let hex = std::str::from_utf8(&bytes[index + 1..index + 3]).ok();
+            if let Some(value) = hex.and_then(|text| u8::from_str_radix(text, 16).ok()) {
+                out.push(value);
+                index += 3;
+                continue;
+            }
+        }
+        out.push(bytes[index]);
+        index += 1;
+    }
+    PathBuf::from(std::ffi::OsStr::from_bytes(&out))
 }
 
 pub fn state_dir() -> PathBuf {
@@ -155,5 +207,40 @@ pub struct QueueItem {
     pub status: QueueStatus,
     pub overwrite: bool,
     pub error: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_path_with_a_pipe_survives_the_queue_file() {
+        let path = PathBuf::from("/tmp/notes|2024.txt");
+        let encoded = encode_path(&path);
+        assert!(!encoded.contains('|'));
+        assert_eq!(decode_path(&encoded), path);
+    }
+
+    #[test]
+    fn a_path_with_a_line_break_survives_the_queue_file() {
+        let path = PathBuf::from("/tmp/two\nlines.txt");
+        let encoded = encode_path(&path);
+        assert!(!encoded.contains('\n'));
+        assert_eq!(decode_path(&encoded), path);
+    }
+
+    #[test]
+    fn a_path_that_is_not_utf8_survives_the_queue_file() {
+        let path = PathBuf::from(std::ffi::OsStr::from_bytes(b"/tmp/f\x80oo"));
+        let encoded = encode_path(&path);
+        assert_eq!(decode_path(&encoded), path);
+    }
+
+    #[test]
+    fn a_normal_path_stays_readable() {
+        let path = PathBuf::from("/home/user/Documents/notes.txt");
+        assert_eq!(encode_path(&path), "/home/user/Documents/notes.txt");
+        assert_eq!(decode_path(&encode_path(&path)), path);
+    }
 }
 

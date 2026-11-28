@@ -1952,9 +1952,13 @@ impl App {
             self.clipboard = ClipboardOp::None;
             self.clipboard_paths.clear();
             self.marked.clear();
+            // The tasks are written down before the worker starts, so a
+            // task that is running is not lost if rfn stops.
+            save_queue(&self.queue);
             self.start_queue();
+        } else {
+            save_queue(&self.queue);
         }
-        save_queue(&self.queue);
         Ok(())
     }
 
