@@ -200,15 +200,25 @@ fn current_theme() -> String {
 }
 
 fn print_themes(current: &str) {
-    println!("rfn built-in themes\n");
+    println!("rfn themes\n");
 
-    let mut found_current = false;
-    for name in crate::config::ColorConfig::THEMES {
-        let Some(colors) = crate::config::ColorConfig::preset(name) else {
+    // The colors of the user, if there are any, so the custom theme can be
+    // shown next to the built-in ones.
+    let user_colors = AppConfig::load()
+        .ok()
+        .map(|config| config.ui.colors)
+        .unwrap_or_default();
+
+    for name in crate::config::ColorConfig::picker_list() {
+        let colors = if name == crate::config::ColorConfig::CUSTOM {
+            Some(user_colors.clone())
+        } else {
+            crate::config::ColorConfig::preset(name)
+        };
+        let Some(colors) = colors else {
             continue;
         };
         let active = name == current;
-        found_current |= active;
         println!(
             "  {} {:<18}{}",
             if active { "*" } else { " " },
@@ -220,12 +230,10 @@ fn print_themes(current: &str) {
         println!();
     }
 
-    if !found_current {
-        if current == "custom" {
-            println!("  Active theme: custom (uses [ui.colors] from the config)\n");
-        } else {
-            println!("  Active theme: {current} (not a built-in theme)\n");
-        }
+    if current != crate::config::ColorConfig::CUSTOM
+        && !crate::config::ColorConfig::THEMES.contains(&current)
+    {
+        println!("  Active theme: {current} (not a built-in theme)\n");
     }
 
     println!("Set one with: rfn --theme <name>");
@@ -233,11 +241,11 @@ fn print_themes(current: &str) {
 
 fn set_theme(name: &str) -> Result<()> {
     let preset = crate::config::ColorConfig::preset(name);
-    if preset.is_none() && name != "custom" {
+    if preset.is_none() && name != crate::config::ColorConfig::CUSTOM {
         eprintln!("error: unknown theme '{name}'");
         eprintln!(
             "available themes: {}",
-            crate::config::ColorConfig::THEMES.join(", ")
+            crate::config::ColorConfig::picker_list().join(", ")
         );
         eprintln!("run `rfn --themes` to preview them");
         std::process::exit(2);

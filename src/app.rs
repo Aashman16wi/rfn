@@ -877,7 +877,7 @@ impl App {
 
     fn render(&mut self, frame: &mut ratatui::Frame) {
         let area = frame.area();
-        let colors = &self.config.ui.colors;
+        let colors = self.config.ui.active_colors();
 
         frame.render_widget(
             ratatui::widgets::Block::default()
@@ -1083,21 +1083,21 @@ impl App {
                 status_area,
                 self.mode,
                 &self.search_query,
-                &self.config.ui.colors,
+                self.config.ui.active_colors(),
             ),
             AppMode::Rename => crate::ui::prompt::render_input(
                 frame,
                 status_area,
                 self.mode,
                 &self.rename_buffer,
-                &self.config.ui.colors,
+                self.config.ui.active_colors(),
             ),
             AppMode::NewFile | AppMode::NewDir => crate::ui::prompt::render_input(
                 frame,
                 status_area,
                 self.mode,
                 &self.new_name_buffer,
-                &self.config.ui.colors,
+                self.config.ui.active_colors(),
             ),
             AppMode::ConfirmDelete => {
                 let name = self
@@ -1114,7 +1114,7 @@ impl App {
                     area,
                     title,
                     &message,
-                    &self.config.ui.colors,
+                    self.config.ui.active_colors(),
                 );
             }
             AppMode::ConfirmQuit => {
@@ -1123,7 +1123,7 @@ impl App {
                     area,
                     " Quit ",
                     "Quit rfn?",
-                    &self.config.ui.colors,
+                    self.config.ui.active_colors(),
                 );
             }
             AppMode::ConfirmOverwrite => {
@@ -1137,7 +1137,7 @@ impl App {
                     area,
                     " Overwrite ",
                     &message,
-                    &self.config.ui.colors,
+                    self.config.ui.active_colors(),
                 );
             }
             AppMode::ConfirmPurge => {
@@ -1152,7 +1152,7 @@ impl App {
                     area,
                     " Delete forever ",
                     &format!("Delete \"{name}\" permanently? This cannot be undone."),
-                    &self.config.ui.colors,
+                    self.config.ui.active_colors(),
                 );
             }
             AppMode::QueueManager => {
@@ -1163,7 +1163,7 @@ impl App {
                     &mut self.queue_state,
                     self.queue_running,
                     self.notice.as_deref(),
-                    &self.config.ui.colors,
+                    self.config.ui.active_colors(),
                 );
             }
             AppMode::ThemePicker => {
@@ -1172,6 +1172,7 @@ impl App {
                     area,
                     self.theme_index,
                     &self.config.ui.theme,
+                    self.config.ui.active_colors(),
                     &self.config.ui.colors,
                 );
             }
@@ -1181,7 +1182,7 @@ impl App {
                     area,
                     &self.bookmarks,
                     &mut self.bookmark_state,
-                    &self.config.ui.colors,
+                    self.config.ui.active_colors(),
                 );
             }
             _ => {}
@@ -1533,7 +1534,7 @@ impl App {
                     }
                 }
                 Action::ThemePicker => {
-                    self.theme_index = crate::config::ColorConfig::THEMES
+                    self.theme_index = crate::config::ColorConfig::picker_list()
                         .iter()
                         .position(|name| *name == self.config.ui.theme)
                         .unwrap_or(0);
@@ -2542,7 +2543,7 @@ impl App {
     fn handle_theme_picker(&mut self, key: crossterm::event::KeyEvent) {
         use crossterm::event::KeyCode;
 
-        let count = crate::config::ColorConfig::THEMES.len();
+        let count = crate::config::ColorConfig::picker_list().len();
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => self.mode = AppMode::Normal,
             KeyCode::Up | KeyCode::Char('k') => {
@@ -2554,7 +2555,9 @@ impl App {
             KeyCode::Home => self.theme_index = 0,
             KeyCode::End => self.theme_index = count.saturating_sub(1),
             KeyCode::Enter => {
-                if let Some(name) = crate::config::ColorConfig::THEMES.get(self.theme_index) {
+                if let Some(name) = crate::config::ColorConfig::picker_list()
+                    .get(self.theme_index)
+                {
                     self.apply_theme(name);
                 }
                 self.mode = AppMode::Normal;
@@ -2565,11 +2568,16 @@ impl App {
 
     /// Switch theme immediately and remember the choice for next launch.
     fn apply_theme(&mut self, name: &str) {
-        let Some(colors) = crate::config::ColorConfig::preset(name) else {
-            return;
-        };
+        if name == crate::config::ColorConfig::CUSTOM {
+            // The colors of the user stay as they are.
+            self.config.ui.theme_colors = None;
+        } else {
+            let Some(colors) = crate::config::ColorConfig::preset(name) else {
+                return;
+            };
+            self.config.ui.theme_colors = Some(colors);
+        }
         self.config.ui.theme = name.to_string();
-        self.config.ui.colors = colors;
 
         match crate::config::AppConfig::save_theme(name) {
             Ok(path) => self.notice = Some(format!(

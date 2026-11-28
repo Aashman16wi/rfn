@@ -30,7 +30,19 @@ pub struct UiConfig {
     pub show_parent: bool,
     /// Built-in color theme, or "custom" to use the [ui.colors] values.
     pub theme: String,
+    /// The colors of the built-in theme. They are kept apart from `colors`,
+    /// so switching back to "custom" still finds the colors of the user.
+    #[serde(skip)]
+    pub theme_colors: Option<ColorConfig>,
+    /// The colors of the user, used when the theme is "custom".
     pub colors: ColorConfig,
+}
+
+impl UiConfig {
+    /// The colors that are on the screen right now.
+    pub fn active_colors(&self) -> &ColorConfig {
+        self.theme_colors.as_ref().unwrap_or(&self.colors)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -165,14 +177,34 @@ impl Default for UiConfig {
             show_git_status: true,
             show_parent: true,
             theme: "tokyo-night".to_string(),
+            theme_colors: ColorConfig::preset("tokyo-night"),
             colors: ColorConfig::default(),
         }
     }
 }
 
 impl ColorConfig {
-    pub const THEMES: [&'static str; 4] =
-        ["tokyo-night", "catppuccin-mocha", "gruvbox-dark", "nord"];
+    /// The name of the theme that uses the colors of the user.
+    pub const CUSTOM: &'static str = "custom";
+
+    pub const THEMES: [&'static str; 8] = [
+        "tokyo-night",
+        "catppuccin-mocha",
+        "catppuccin-latte",
+        "gruvbox-dark",
+        "gruvbox-light",
+        "nord",
+        "dracula",
+        "rose-pine",
+    ];
+
+    /// Every theme the picker shows: the colors of the user first, then the
+    /// built-in ones.
+    pub fn picker_list() -> Vec<&'static str> {
+        let mut names = vec![Self::CUSTOM];
+        names.extend_from_slice(&Self::THEMES);
+        names
+    }
 
     pub fn preset(name: &str) -> Option<Self> {
         // bg, fg, muted, accent, border, topbar_bg, status_bg, selected_bg,
@@ -191,17 +223,41 @@ impl ColorConfig {
                 "#a6e3a1", "#a6e3a1", "#f9e2af", "#f38ba8", "#fab387", "#6c7086",
                 "#1e1e2e",
             ],
+            "catppuccin-latte" => [
+                "#eff1f5", "#4c4f69", "#9ca0b0", "#1e66f5", "#ccd0da", "#e6e9ef",
+                "#e6e9ef", "#bcc0cc", "#4c4f69", "#1e66f5", "#4c4f69", "#8839ef",
+                "#40a02b", "#40a02b", "#df8e1d", "#d20f39", "#fe640b", "#9ca0b0",
+                "#eff1f5",
+            ],
             "gruvbox-dark" => [
                 "#282828", "#ebdbb2", "#928374", "#83a598", "#3c3836", "#1d2021",
                 "#1d2021", "#504945", "#fbf1c7", "#83a598", "#ebdbb2", "#d3869b",
                 "#b8bb26", "#b8bb26", "#fabd2f", "#fb4934", "#fe8019", "#928374",
                 "#282828",
             ],
+            "gruvbox-light" => [
+                "#fbf1c7", "#3c3836", "#7c6f64", "#076678", "#d5c4a1", "#ebdbb2",
+                "#ebdbb2", "#d5c4a1", "#3c3836", "#076678", "#3c3836", "#8f3f71",
+                "#98971a", "#98971a", "#b57614", "#9d0006", "#b57614", "#7c6f64",
+                "#fbf1c7",
+            ],
             "nord" => [
                 "#2e3440", "#d8dee9", "#4c566a", "#88c0d0", "#3b4252", "#292e39",
                 "#292e39", "#434c5e", "#eceff4", "#88c0d0", "#d8dee9", "#b48ead",
                 "#a3be8c", "#a3be8c", "#ebcb8b", "#bf616a", "#d08770", "#4c566a",
                 "#2e3440",
+            ],
+            "dracula" => [
+                "#282a36", "#f8f8f2", "#6272a4", "#bd93f9", "#44475a", "#21222c",
+                "#21222c", "#44475a", "#f8f8f2", "#8be9fd", "#f8f8f2", "#ff79c6",
+                "#50fa7b", "#50fa7b", "#f1fa8c", "#ff5555", "#ffb86c", "#6272a4",
+                "#282a36",
+            ],
+            "rose-pine" => [
+                "#191724", "#e0def4", "#6e6a86", "#ebbcba", "#26233a", "#1f1d2e",
+                "#1f1d2e", "#403d52", "#e0def4", "#31748f", "#e0def4", "#c4a7e7",
+                "#f6c177", "#9ccfd8", "#f6c177", "#eb6f92", "#f6c177", "#6e6a86",
+                "#191724",
             ],
             _ => return None,
         };
@@ -466,11 +522,9 @@ impl AppConfig {
         );
 
         let mut config: AppConfig = builder.build()?.try_deserialize()?;
-        if config.ui.theme != "custom" {
-            if let Some(colors) = ColorConfig::preset(&config.ui.theme) {
-                config.ui.colors = colors;
-            }
-        }
+        // The colors of a built-in theme are kept apart from the colors of
+        // the user, so switching back to "custom" still finds them.
+        config.ui.theme_colors = ColorConfig::preset(&config.ui.theme);
         Ok(config)
     }
 

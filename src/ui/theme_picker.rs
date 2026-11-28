@@ -14,6 +14,7 @@ pub fn render(
     selected: usize,
     active_theme: &str,
     colors: &ColorConfig,
+    custom_colors: &ColorConfig,
 ) {
     let bg = crate::ui::parse_color(&colors.bg);
     let fg = crate::ui::parse_color(&colors.fg);
@@ -23,7 +24,8 @@ pub fn render(
     // The popup has to stay inside the terminal. A popup that reaches past
     // the edge makes ratatui panic while it clears the area.
     let width = area.width.saturating_sub(4).clamp(20, 60).min(area.width);
-    let height = (ColorConfig::THEMES.len() as u16 + 4).clamp(5, 20).min(area.height);
+    let entries = ColorConfig::picker_list();
+    let height = (entries.len() as u16 + 4).clamp(5, 20).min(area.height);
     let popup = Rect {
         x: area.x + (area.width.saturating_sub(width)) / 2,
         y: area.y + (area.height.saturating_sub(height)) / 2,
@@ -53,10 +55,14 @@ pub fn render(
         .constraints([Constraint::Min(0), Constraint::Length(1)])
         .split(inner);
 
-    let items: Vec<ListItem> = ColorConfig::THEMES
+    let items: Vec<ListItem> = entries
         .iter()
         .map(|name| {
-            let preset = ColorConfig::preset(name);
+            let preset = if *name == ColorConfig::CUSTOM {
+                Some(custom_colors.clone())
+            } else {
+                ColorConfig::preset(name)
+            };
             let active = *name == active_theme;
 
             let mut spans = vec![Span::styled(
@@ -105,8 +111,14 @@ pub fn render(
         )
         .highlight_symbol("▶ ");
 
+    let selected = selected.min(entries.len().saturating_sub(1));
     let mut state = ListState::default();
-    state.select(Some(selected.min(ColorConfig::THEMES.len().saturating_sub(1))));
+    state.select(Some(selected));
+    // Keep the selected row in sight when there are more themes than rows.
+    let rows = chunks[0].height as usize;
+    if rows > 0 {
+        *state.offset_mut() = selected.saturating_sub(rows - 1);
+    }
     frame.render_stateful_widget(list, chunks[0], &mut state);
 
     let footer = Paragraph::new(Line::from(Span::styled(
