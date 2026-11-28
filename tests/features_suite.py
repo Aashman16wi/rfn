@@ -67,10 +67,32 @@ class App:
                     return
                 self.buffer.extend(data)
 
+    def drain_until_quiet(self, quiet=0.25, limit=3.0):
+        """Read until rfn stops writing for a moment.
+
+        A key can take a little longer to show up on the screen than the
+        sleep after it, so the screen is only looked at once the app has
+        gone quiet.
+        """
+        end = time.time() + limit
+        last = time.time()
+        while time.time() < end:
+            ready, _, _ = select.select([self.fd], [], [], 0.05)
+            if ready:
+                try:
+                    data = os.read(self.fd, 1 << 20)
+                except OSError:
+                    return
+                if not data:
+                    return
+                self.buffer.extend(data)
+                last = time.time()
+            elif time.time() - last >= quiet:
+                return
+
     def key(self, data, wait=0.25):
         os.write(self.fd, data)
-        time.sleep(wait)
-        self.drain(0.05)
+        self.drain_until_quiet(quiet=wait)
 
     def screen(self):
         screen = pyte.Screen(COLS, ROWS)
