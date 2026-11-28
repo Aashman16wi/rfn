@@ -24,7 +24,11 @@ pub async fn read_dir(path: &Path, show_hidden: bool) -> Result<Vec<FileEntry>> 
             }
 
             let entry_path = entry.path();
-            let metadata = entry.metadata()?;
+            // One file that cannot be read should not empty the whole
+            // folder. It is skipped and the rest is shown.
+            let Ok(metadata) = entry.metadata() else {
+                continue;
+            };
             let file_type = metadata.file_type();
             let size = metadata.len();
             let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
