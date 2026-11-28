@@ -335,38 +335,37 @@ impl AppConfig {
 
         if path.exists() {
             let text = std::fs::read_to_string(&path)?;
-            let mut value: toml::Value = toml::from_str(&text).map_err(|error| {
+            // toml_edit keeps the comments, the spacing and the order of the
+            // sections. Parsing the file as plain TOML and writing it back
+            // would throw away everything the user wrote themselves.
+            let mut document = text.parse::<toml_edit::DocumentMut>().map_err(|error| {
                 ConfigError::Io(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     format!("cannot parse {}: {error}", path.display()),
                 ))
             })?;
-            let table = value.as_table_mut().ok_or_else(|| {
-                ConfigError::Io(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "config root is not a table",
-                ))
-            })?;
-            let ui = table
-                .entry("ui")
-                .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
-            let ui = ui.as_table_mut().ok_or_else(|| {
-                ConfigError::Io(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "ui is not a table in the config",
-                ))
-            })?;
-            ui.insert(
-                "theme".to_string(),
-                toml::Value::String(name.to_string()),
-            );
-            std::fs::write(&path, toml::to_string_pretty(&value)?)?;
+
+            match document.get_mut("ui") {
+                Some(toml_edit::Item::Table(table)) => {
+                    table["theme"] = toml_edit::value(name);
+                }
+                Some(_) => {
+                    return Err(ConfigError::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "ui is not a table in the config",
+                    )));
+                }
+                None => {
+                    let mut table = toml_edit::Table::new();
+                    table["theme"] = toml_edit::value(name);
+                    document["ui"] = toml_edit::Item::Table(table);
+                }
+            }
+
+            std::fs::write(&path, document.to_string())?;
         } else {
             let mut config = AppConfig::default();
             config.ui.theme = name.to_string();
-            if let Some(colors) = ColorConfig::preset(name) {
-                config.ui.colors = colors;
-            }
             std::fs::write(&path, toml::to_string_pretty(&config)?)?;
         }
 

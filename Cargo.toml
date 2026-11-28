@@ -25,6 +25,9 @@ git2 = "0.18"
 config = "0.14"
 serde = { version = "1.0", features = ["derive"] }
 toml = "0.8"
+# Used to change one setting in the config file without losing the comments
+# and the layout the user wrote.
+toml_edit = "0.22"
 dirs = "5.0"
 
 # CLI
