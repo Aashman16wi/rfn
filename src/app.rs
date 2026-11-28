@@ -38,10 +38,35 @@ enum QueueEvent {
     AllDone,
 }
 
+/// Results produced by the background directory loader. Every result carries
+/// the generation it was requested with, so a slow scan of an old directory can
+/// never overwrite a newer one.
+#[derive(Debug)]
+enum LoadResult {
+    Entries {
+        generation: u64,
+        path: PathBuf,
+        entries: Vec<FileEntry>,
+        parent_entries: Vec<FileEntry>,
+    },
+    Git {
+        generation: u64,
+        path: PathBuf,
+        root: PathBuf,
+        statuses: Vec<(PathBuf, crate::types::GitStatus)>,
+    },
+    Error {
+        generation: u64,
+        path: PathBuf,
+        message: String,
+    },
+}
+
 /// What woke the event loop.
 enum InputEvent {
     Term(Event),
     Queue(QueueEvent),
+    Load(LoadResult),
 }
 
 /// Build an image picker without poking at stdio. `Picker::from_query_stdio`
@@ -139,6 +164,13 @@ pub struct App {
     sort_by: SortBy,
     reverse_sort: bool,
 
+    // Background directory loading
+    load_generation: u64,
+    load_tx: Option<mpsc::UnboundedSender<LoadResult>>,
+    load_rx: Option<mpsc::UnboundedReceiver<LoadResult>>,
+    loading: bool,
+    git_loading: bool,
+
     help_visible: bool,
     notice: Option<String>,
     pending_bulk_rename: bool,
@@ -166,6 +198,7 @@ impl App {
         let reverse_sort = config.behavior.reverse_sort;
 
         let key_mapper = KeyMapper::new(&config.keys);
+        let (load_tx, load_rx) = mpsc::unbounded_channel();
 
         let mut app = Self {
             config,
@@ -207,6 +240,11 @@ impl App {
             show_git,
             sort_by,
             reverse_sort,
+            load_generation: 0,
+            load_tx: Some(load_tx),
+            load_rx: Some(load_rx),
+            loading: false,
+            git_loading: false,
             help_visible: false,
             notice: None,
             pending_bulk_rename: false,
@@ -214,7 +252,10 @@ impl App {
             last_tick: std::time::Instant::now(),
         };
 
-        app.refresh().await?;
+        // The first listing is awaited so the very first frame is complete;
+        // every later refresh happens in the background.
+        app.refresh();
+        app.wait_for_entries().await;
         app.tabs.push(app.snapshot());
 
         if restore_tabs {
@@ -223,7 +264,8 @@ impl App {
                 for path in &saved.tabs {
                     if path.is_dir() {
                         app.current_path = path.clone();
-                        app.refresh().await?;
+                        app.refresh();
+                        app.wait_for_entries().await;
                         restored.push(app.snapshot());
                     }
                 }
@@ -231,7 +273,8 @@ impl App {
                     app.tabs = restored;
                     app.active_tab = saved.active.min(app.tabs.len() - 1);
                     app.restore_active_tab();
-                    app.refresh().await?;
+                    app.refresh();
+                    app.wait_for_entries().await;
                 }
                 app.bookmarks = saved.bookmarks;
             }
@@ -263,6 +306,9 @@ impl App {
                             }
                             InputEvent::Queue(event) => {
                                 self.handle_queue_event(event).await?;
+                            }
+                            InputEvent::Load(result) => {
+                                self.apply_load_result(result).await;
                             }
                         }
                         terminal.draw(|f| self.render(f))?;
@@ -309,6 +355,19 @@ impl App {
                 }
             }
 
+            // Directory listings arrive in the background; apply them as soon
+            // as they show up so the window never feels stuck.
+            if let Some(rx) = self.load_rx.as_mut() {
+                match rx.try_recv() {
+                    Ok(result) => return Ok(Some(InputEvent::Load(result))),
+                    Err(mpsc::error::TryRecvError::Disconnected) => {
+                        self.load_rx = None;
+                        self.loading = false;
+                    }
+                    Err(mpsc::error::TryRecvError::Empty) => {}
+                }
+            }
+
             if !crossterm::event::poll(Duration::from_millis(50))? {
                 return Ok(None);
             }
@@ -330,52 +389,203 @@ impl App {
         if self.last_tick.elapsed() < Duration::from_secs(2) {
             return Ok(false);
         }
-
-        let before: Vec<_> = self.display.iter().map(|entry| entry.git_status).collect();
-        self.refresh_git().await?;
-        self.rebuild_display();
-        let after: Vec<_> = self.display.iter().map(|entry| entry.git_status).collect();
         self.last_tick = std::time::Instant::now();
 
-        Ok(before != after)
+        // Git status is re-read in the background; the result is applied when
+        // it arrives, so the interface never blocks on a big repository.
+        if self.show_git {
+            self.request_git_refresh();
+        }
+
+        Ok(false)
     }
 
-    async fn refresh(&mut self) -> Result<()> {
+    /// Ask the background loader for a fresh listing of the current directory.
+    /// The UI stays responsive: the result is applied when it arrives, and
+    /// results from an older generation are dropped.
+    fn refresh(&mut self) {
         if self.mode == AppMode::TrashBrowser {
-            self.refresh_trash().await?;
-            return Ok(());
+            // The trash browser has its own listing; it is loaded when the
+            // mode is opened and when an item is restored.
+            return;
         }
-        match read_dir(&self.current_path, self.show_hidden).await {
-            Ok(entries) => self.entries = entries,
-            Err(error) => {
-                self.notice = Some(format!(
-                    "Cannot read {}: {error}",
-                    self.current_path.display()
-                ));
-                self.entries.clear();
-            }
-        }
-        sort_entries(&mut self.entries, self.sort_by, self.config.behavior.sort_dirs_first, self.reverse_sort);
 
-        self.parent_entries = match self.current_path.parent() {
-            Some(parent) => {
-                let mut entries = read_dir(parent, self.show_hidden).await.unwrap_or_default();
-                sort_entries(
-                    &mut entries,
-                    self.sort_by,
-                    self.config.behavior.sort_dirs_first,
-                    self.reverse_sort,
-                );
-                entries
+        self.load_generation = self.load_generation.wrapping_add(1);
+        let generation = self.load_generation;
+
+        let path = self.current_path.clone();
+        let show_hidden = self.show_hidden;
+        let sort_by = self.sort_by;
+        let reverse_sort = self.reverse_sort;
+        let dirs_first = self.config.behavior.sort_dirs_first;
+        let git_enabled = self.show_git;
+
+        // One channel for every background result. Results are told apart by
+        // their generation, so a slow scan of an old directory can never
+        // overwrite a newer one and nothing is ever lost to a dropped
+        // receiver.
+        let Some(tx) = self.load_tx.clone() else {
+            return;
+        };
+        self.loading = true;
+
+        tokio::spawn(async move {
+            let mut entries = match read_dir(&path, show_hidden).await {
+                Ok(entries) => entries,
+                Err(error) => {
+                    let _ = tx.send(LoadResult::Error {
+                        generation,
+                        path: path.clone(),
+                        message: format!("Cannot read {}: {error}", path.display()),
+                    });
+                    return;
+                }
+            };
+            sort_entries(&mut entries, sort_by, dirs_first, reverse_sort);
+
+            let parent_entries = match path.parent() {
+                Some(parent) => {
+                    let mut entries = read_dir(parent, show_hidden).await.unwrap_or_default();
+                    sort_entries(&mut entries, sort_by, dirs_first, reverse_sort);
+                    entries
+                }
+                None => Vec::new(),
+            };
+
+            if tx
+                .send(LoadResult::Entries {
+                    generation,
+                    path: path.clone(),
+                    entries,
+                    parent_entries,
+                })
+                .is_err()
+            {
+                return;
             }
-            None => Vec::new(),
+
+            if git_enabled {
+                if let Some(root) = find_git_root(&path) {
+                    let statuses = get_git_status(&root).await.unwrap_or_default();
+                    let _ = tx.send(LoadResult::Git {
+                        generation,
+                        path,
+                        root,
+                        statuses,
+                    });
+                }
+            }
+        });
+    }
+
+    /// Wait for the first listing to arrive. Only used at startup so the
+    /// first frame is complete.
+    async fn wait_for_entries(&mut self) {
+        loop {
+            let received = match self.load_rx.as_mut() {
+                Some(rx) => match rx.try_recv() {
+                    Ok(result) => {
+                        self.apply_load_result(result).await;
+                        !self.loading
+                    }
+                    Err(mpsc::error::TryRecvError::Empty) => false,
+                    Err(mpsc::error::TryRecvError::Disconnected) => {
+                        self.loading = false;
+                        true
+                    }
+                },
+                None => true,
+            };
+            if received {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    }
+
+    /// Apply a background result, ignoring anything that is out of date.
+    async fn apply_load_result(&mut self, result: LoadResult) {
+        match result {
+            LoadResult::Entries {
+                generation,
+                path,
+                entries,
+                parent_entries,
+            } => {
+                if generation != self.load_generation || path != self.current_path {
+                    return;
+                }
+                self.entries = entries;
+                self.parent_entries = parent_entries;
+                self.loading = false;
+                self.rebuild_display();
+                self.update_preview().await;
+            }
+            LoadResult::Git {
+                generation,
+                path,
+                root,
+                statuses,
+            } => {
+                // Always clear the in-flight flag, even for a stale result,
+                // otherwise git polling would stop for good.
+                self.git_loading = false;
+                if generation != self.load_generation || path != self.current_path {
+                    return;
+                }
+                self.git_root = Some(root);
+                self.git_statuses = statuses;
+                apply_git_status(&mut self.entries, &self.git_statuses);
+                self.rebuild_display();
+            }
+            LoadResult::Error {
+                generation,
+                path,
+                message,
+            } => {
+                if generation != self.load_generation || path != self.current_path {
+                    return;
+                }
+                self.loading = false;
+                self.entries.clear();
+                self.parent_entries.clear();
+                self.rebuild_display();
+                self.notice = Some(message);
+            }
+        }
+    }
+
+    /// Re-read the git status of the current repository without blocking the
+    /// interface. Used by the periodic tick so changes show up live.
+    fn request_git_refresh(&mut self) {
+        if !self.show_git || self.git_loading {
+            return;
+        }
+        let Some(tx) = self.load_tx.clone() else {
+            return;
+        };
+        let Some(root) = find_git_root(&self.current_path) else {
+            self.git_root = None;
+            self.git_statuses.clear();
+            for entry in &mut self.entries {
+                entry.git_status = Default::default();
+            }
+            return;
         };
 
-        self.refresh_git().await?;
-        self.rebuild_display();
-        self.update_preview().await;
+        let generation = self.load_generation;
+        let path = self.current_path.clone();
+        self.git_loading = true;
 
-        Ok(())
+        tokio::spawn(async move {
+            let statuses = get_git_status(&root).await.unwrap_or_default();
+            let _ = tx.send(LoadResult::Git {
+                generation,
+                path,
+                root,
+                statuses,
+            });
+        });
     }
 
     async fn refresh_trash(&mut self) -> Result<()> {
@@ -433,27 +643,6 @@ impl App {
             let offset = self.list_state.offset().min(self.display.len() - 1);
             *self.list_state.offset_mut() = offset;
         }
-    }
-
-    async fn refresh_git(&mut self) -> Result<()> {
-        if !self.show_git {
-            return Ok(());
-        }
-
-        if let Some(root) = find_git_root(&self.current_path) {
-            if self.git_root.as_ref() != Some(&root) {
-                self.git_root = Some(root.clone());
-                self.git_statuses = get_git_status(&root).await?;
-            }
-            apply_git_status(&mut self.entries, &self.git_statuses);
-        } else {
-            self.git_root = None;
-            self.git_statuses.clear();
-            for entry in &mut self.entries {
-                entry.git_status = Default::default();
-            }
-        }
-        Ok(())
     }
 
     async fn update_preview(&mut self) {
@@ -543,7 +732,7 @@ impl App {
         self.mode = AppMode::Normal;
         self.active_tab = index;
         self.restore_active_tab();
-        self.refresh().await?;
+        self.refresh();
         Ok(())
     }
 
@@ -567,7 +756,7 @@ impl App {
             self.active_tab = self.tabs.len() - 1;
         }
         self.restore_active_tab();
-        self.refresh().await?;
+        self.refresh();
         Ok(())
     }
 
@@ -699,6 +888,7 @@ impl App {
             self.show_git,
             &self.marked,
             &current_title,
+            self.loading,
         );
 
         // Preview
@@ -1054,7 +1244,7 @@ impl App {
                 }
                 Action::ToggleHidden => {
                     self.show_hidden = !self.show_hidden;
-                    self.refresh().await?;
+                    self.refresh();
                 }
                 Action::TogglePreview => {
                     self.show_preview = !self.show_preview;
@@ -1063,12 +1253,18 @@ impl App {
                 Action::ToggleGit => {
                     self.show_git = !self.show_git;
                     if self.show_git {
-                        self.refresh_git().await?;
+                        self.request_git_refresh();
+                    } else {
+                        self.git_root = None;
+                        self.git_statuses.clear();
+                        for entry in &mut self.entries {
+                            entry.git_status = Default::default();
+                        }
                         self.rebuild_display();
                     }
                 }
                 Action::Help => self.help_visible = !self.help_visible,
-                Action::Refresh => self.refresh().await?,
+                Action::Refresh => self.refresh(),
                 Action::GotoParent => self.go_parent().await?,
                 Action::GotoHome => self.go_home().await?,
                 Action::SortCycle => {
@@ -1078,11 +1274,11 @@ impl App {
                         SortBy::Modified => SortBy::Extension,
                         SortBy::Extension => SortBy::Name,
                     };
-                    self.refresh().await?;
+                    self.refresh();
                 }
                 Action::ReverseSort => {
                     self.reverse_sort = !self.reverse_sort;
-                    self.refresh().await?;
+                    self.refresh();
                 }
                 Action::NewTab => self.new_tab().await,
                 Action::CloseTab => self.close_tab().await?,
@@ -1139,7 +1335,7 @@ impl App {
                 Action::BookmarkJump => {
                     if !self.bookmarks.is_empty() {
                         self.current_path = self.bookmarks[0].clone();
-                        self.refresh().await?;
+                        self.refresh();
                     }
                 }
                 Action::OpenTrash => self.mode = AppMode::TrashBrowser,
@@ -1324,6 +1520,18 @@ impl App {
         Ok(())
     }
 
+    /// Drop the current listing while a new directory is being read, so the
+    /// old files are never shown under the new path.
+    fn clear_listing(&mut self) {
+        self.entries.clear();
+        self.display.clear();
+        self.parent_entries.clear();
+        self.list_state.select(None);
+        *self.list_state.offset_mut() = 0;
+        self.preview_content = PreviewContent::none();
+        self.preview_protocol = None;
+    }
+
     async fn enter(&mut self) -> Result<()> {
         if let Some(entry) = self.selected_entry().cloned() {
             // Follow symlinks to directories when entering.
@@ -1331,9 +1539,8 @@ impl App {
                 self.clear_marks();
                 self.current_path = entry.path;
                 self.search_query.clear();
-                self.list_state.select(Some(0));
-                *self.list_state.offset_mut() = 0;
-                self.refresh().await?;
+                self.clear_listing();
+                self.refresh();
             } else if let Err(error) = opener::open(&entry.path) {
                 self.notice = Some(format!("Could not open file: {error}"));
             }
@@ -1346,9 +1553,8 @@ impl App {
             self.clear_marks();
             self.current_path = parent;
             self.search_query.clear();
-            self.list_state.select(Some(0));
-            *self.list_state.offset_mut() = 0;
-            self.refresh().await?;
+            self.clear_listing();
+            self.refresh();
         }
         Ok(())
     }
@@ -1358,9 +1564,8 @@ impl App {
             self.clear_marks();
             self.current_path = home;
             self.search_query.clear();
-            self.list_state.select(Some(0));
-            *self.list_state.offset_mut() = 0;
-            self.refresh().await?;
+            self.clear_listing();
+            self.refresh();
         }
         Ok(())
     }
@@ -1380,7 +1585,7 @@ impl App {
                 self.notice = Some(format!("Rename failed: {error}"));
                 return Ok(());
             }
-            self.refresh().await?;
+            self.refresh();
         }
         Ok(())
     }
@@ -1391,7 +1596,7 @@ impl App {
             self.notice = Some(format!("Could not create file: {error}"));
             return Ok(());
         }
-        self.refresh().await?;
+        self.refresh();
         Ok(())
     }
 
@@ -1401,7 +1606,7 @@ impl App {
             self.notice = Some(format!("Could not create directory: {error}"));
             return Ok(());
         }
-        self.refresh().await?;
+        self.refresh();
         Ok(())
     }
 
@@ -1578,7 +1783,7 @@ impl App {
                     format!("Queue finished: {done} done, {failed} failed — Q to inspect")
                 });
                 save_queue(&self.queue);
-                self.refresh().await?;
+                self.refresh();
             }
         }
         Ok(())
@@ -1728,7 +1933,7 @@ impl App {
                     let _ = tokio::fs::rename(temporary, source).await;
                 }
                 self.notice = Some(format!("Bulk rename failed: {error}"));
-                self.refresh().await?;
+                self.refresh();
                 return Ok(());
             }
             staged.push((temporary, source.clone(), destination.clone()));
@@ -1757,7 +1962,7 @@ impl App {
         }
 
         self.clear_marks();
-        self.refresh().await?;
+        self.refresh();
         Ok(())
     }
 
@@ -1785,7 +1990,7 @@ impl App {
                             self.current_path = entry.path.clone();
                             self.mode = AppMode::Normal;
                             self.trash_entries.clear();
-                            self.refresh().await?;
+                            self.refresh();
                         }
                     }
                 }
@@ -2062,7 +2267,7 @@ impl App {
         }
 
         self.clear_marks();
-        self.refresh().await?;
+        self.refresh();
         Ok(())
     }
 }

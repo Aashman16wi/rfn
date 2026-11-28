@@ -9,7 +9,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, List, ListItem, ListState},
+    widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph},
     Frame,
 };
 use unicode_width::UnicodeWidthStr;
@@ -24,9 +24,24 @@ pub fn render(
     show_git: bool,
     marked: &HashSet<PathBuf>,
     title: &str,
+    loading: bool,
 ) -> Rect {
     let block = pane_block(title, colors);
     let inner = block.inner(area);
+
+    if entries.is_empty() && loading {
+        let spinner = Paragraph::new(Line::from(Span::styled(
+            "  loading…",
+            Style::default().fg(parse_color(&colors.muted)),
+        )))
+        .style(Style::default().bg(parse_color(&colors.bg)));
+        frame.render_widget(spinner, inner);
+        let list = List::new(Vec::<ListItem>::new())
+            .block(block)
+            .style(Style::default().bg(parse_color(&colors.bg)));
+        frame.render_stateful_widget(list, area, state);
+        return inner;
+    }
 
     let items: Vec<ListItem> = entries
         .iter()
