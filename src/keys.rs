@@ -115,6 +115,44 @@ impl KeyMapper {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shift_tab_is_the_key_that_crossterm_sends() {
+        // Crossterm reports shift+tab as BackTab with the shift modifier.
+        assert_eq!(
+            parse_key("backtab"),
+            Some((KeyCode::BackTab, KeyModifiers::SHIFT))
+        );
+        assert_eq!(
+            parse_key("shift+tab"),
+            Some((KeyCode::BackTab, KeyModifiers::SHIFT))
+        );
+        assert_eq!(parse_key("tab"), Some((KeyCode::Tab, KeyModifiers::empty())));
+    }
+
+    #[test]
+    fn the_map_finds_the_action_of_shift_tab() {
+        let mapper = KeyMapper::new(&KeyConfig::default());
+        let event = KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT);
+        assert_eq!(mapper.get_action(event), Some(Action::PrevTab));
+    }
+
+    #[test]
+    fn a_letter_is_the_key_that_crossterm_sends() {
+        assert_eq!(
+            parse_key("P"),
+            Some((KeyCode::Char('P'), KeyModifiers::SHIFT))
+        );
+        assert_eq!(
+            parse_key("ctrl+t"),
+            Some((KeyCode::Char('t'), KeyModifiers::CONTROL))
+        );
+    }
+}
+
 fn parse_key(s: &str) -> Option<(KeyCode, KeyModifiers)> {
     let parts: Vec<&str> = s.split('+').collect();
     let mut mods = KeyModifiers::empty();
@@ -140,8 +178,19 @@ fn parse_key(s: &str) -> Option<(KeyCode, KeyModifiers)> {
         "backspace" => Some(KeyCode::Backspace),
         "delete" | "del" => Some(KeyCode::Delete),
         "esc" | "escape" => Some(KeyCode::Esc),
-        "tab" => Some(KeyCode::Tab),
-        "backtab" => Some(KeyCode::BackTab),
+        "tab" => Some(if mods.contains(KeyModifiers::SHIFT) {
+            // Crossterm sends shift+tab as BackTab, never as Tab with the
+            // shift modifier.
+            KeyCode::BackTab
+        } else {
+            KeyCode::Tab
+        }),
+        "backtab" => {
+            // Crossterm reports shift+tab as BackTab with the shift
+            // modifier, so the map needs both.
+            mods |= KeyModifiers::SHIFT;
+            Some(KeyCode::BackTab)
+        }
         "space" => Some(KeyCode::Char(' ')),
         "home" => Some(KeyCode::Home),
         "end" => Some(KeyCode::End),
