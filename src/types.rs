@@ -120,6 +120,7 @@ pub enum AppMode {
     ConfirmDelete,
     ConfirmQuit,
     ConfirmOverwrite,
+    ConfirmPurge,
     Visual,
     TrashBrowser,
     OpenWith,

@@ -61,6 +61,7 @@ pub fn render(
     current_path: &Path,
     item_count: usize,
     colors: &ColorConfig,
+    title: Option<&str>,
 ) {
     let bg = parse_color(&colors.topbar_bg);
     let muted = parse_color(&colors.muted);
@@ -83,55 +84,62 @@ pub fn render(
         Span::raw(" "),
     ];
 
-    let path_text = display_path(current_path);
-    let mut segments: Vec<String> = path_text
-        .split('/')
-        .filter(|segment| !segment.is_empty())
-        .map(|segment| segment.to_string())
-        .collect();
-
-    if path_text.starts_with('/') {
-        segments.insert(0, "/".to_string());
-    }
-
-    if segments.len() > 4 {
-        let keep = segments.split_off(segments.len() - 3);
-        segments = vec!["…".to_string()];
-        segments.extend(keep);
-    }
-
-    let available = area.width.saturating_sub(right_width as u16 + 2) as usize;
-    let mut used = 6; // " rfn " + space
-
-    for (index, segment) in segments.iter().enumerate() {
-        let is_last = index == segments.len() - 1;
-        let piece = if index == 0 {
-            segment.clone()
-        } else {
-            format!("› {segment}")
-        };
-
-        let piece_width = piece.width();
-        if used + piece_width > available {
-            break;
-        }
-        used += piece_width;
-
-        if index > 0 {
-            spans.push(Span::styled(" ", Style::default().fg(muted)));
-        }
-
+    if let Some(title) = title {
         spans.push(Span::styled(
-            segment.clone(),
-            if is_last {
-                Style::default().fg(accent).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(fg)
-            },
+            title.to_string(),
+            Style::default().fg(accent).add_modifier(Modifier::BOLD),
         ));
+    } else {
+        let path_text = display_path(current_path);
+        let mut segments: Vec<String> = path_text
+            .split('/')
+            .filter(|segment| !segment.is_empty())
+            .map(|segment| segment.to_string())
+            .collect();
 
-        if !is_last {
-            spans.push(Span::styled(" › ", Style::default().fg(muted)));
+        if path_text.starts_with('/') {
+            segments.insert(0, "/".to_string());
+        }
+
+        if segments.len() > 4 {
+            let keep = segments.split_off(segments.len() - 3);
+            segments = vec!["…".to_string()];
+            segments.extend(keep);
+        }
+
+        let available = area.width.saturating_sub(right_width as u16 + 2) as usize;
+        let mut used = 6; // " rfn " + space
+
+        for (index, segment) in segments.iter().enumerate() {
+            let is_last = index == segments.len() - 1;
+            let piece = if index == 0 {
+                segment.clone()
+            } else {
+                format!("› {segment}")
+            };
+
+            let piece_width = piece.width();
+            if used + piece_width > available {
+                break;
+            }
+            used += piece_width;
+
+            if index > 0 {
+                spans.push(Span::styled(" ", Style::default().fg(muted)));
+            }
+
+            spans.push(Span::styled(
+                segment.clone(),
+                if is_last {
+                    Style::default().fg(accent).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(fg)
+                },
+            ));
+
+            if !is_last {
+                spans.push(Span::styled(" › ", Style::default().fg(muted)));
+            }
         }
     }
 

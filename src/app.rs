@@ -132,6 +132,8 @@ pub struct App {
     active_tab: usize,
     bookmarks: Vec<PathBuf>,
     trash_entries: Vec<FileEntry>,
+    /// The real trash items, in the same order as `trash_entries`.
+    trash_items: Vec<trash::TrashItem>,
     trash_list_state: ratatui::widgets::ListState,
     open_with_buffer: String,
 
@@ -215,6 +217,7 @@ impl App {
             active_tab: 0,
             bookmarks: Vec::new(),
             trash_entries: Vec::new(),
+            trash_items: Vec::new(),
             trash_list_state: ratatui::widgets::ListState::default(),
             open_with_buffer: String::new(),
             preview_content: PreviewContent::none(),
@@ -591,33 +594,89 @@ impl App {
     }
 
     async fn refresh_trash(&mut self) -> Result<()> {
-        use trash::os_limited::list;
+        use trash::os_limited::{list, metadata};
+
         self.trash_entries.clear();
-        if let Ok(items) = list() {
-            for item in items {
-                let original_path = item.original_path();
-                if let Ok(meta) = std::fs::metadata(&original_path) {
-                    let name = original_path.file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("unknown")
-                        .to_string();
-                    self.trash_entries.push(FileEntry {
-                        path: original_path,
-                        name,
-                        file_type: if meta.is_dir() { crate::types::FileType::Directory } else { crate::types::FileType::File },
-                        size: meta.len(),
-                        modified: meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH),
-                        permissions: 0,
-                        git_status: crate::types::GitStatus::Unmodified,
-                        mime_type: None,
-                        is_hidden: false,
-                    });
-                }
+        self.trash_items.clear();
+
+        let items = match list() {
+            Ok(items) => items,
+            Err(error) => {
+                self.notice = Some(format!("Cannot read the trash: {error}"));
+                return Ok(());
             }
+        };
+
+        // The trash item keeps the pointer to the real trashed file, the
+        // FileEntry is what gets drawn. They are built together so both
+        // lists always describe the same item at the same index.
+        let mut rows: Vec<(trash::TrashItem, FileEntry)> = Vec::new();
+
+        for item in items {
+            let original_path = item.original_path();
+            let name = item
+                .name
+                .to_str()
+                .map(str::to_string)
+                .unwrap_or_else(|| original_path.display().to_string());
+
+            let (size, is_dir) = match metadata(&item) {
+                Ok(info) => {
+                    let is_dir = matches!(info.size, trash::TrashItemSize::Entries(_));
+                    (info.size.size().unwrap_or(0), is_dir)
+                }
+                Err(_) => (0, false),
+            };
+
+            let modified = if item.time_deleted >= 0 {
+                std::time::SystemTime::UNIX_EPOCH
+                    + std::time::Duration::from_secs(item.time_deleted as u64)
+            } else {
+                std::time::SystemTime::UNIX_EPOCH
+            };
+
+            rows.push((
+                item,
+                FileEntry {
+                    path: original_path,
+                    name,
+                    file_type: if is_dir {
+                        crate::types::FileType::Directory
+                    } else {
+                        crate::types::FileType::File
+                    },
+                    size,
+                    modified,
+                    permissions: 0,
+                    git_status: crate::types::GitStatus::Unmodified,
+                    mime_type: None,
+                    is_hidden: false,
+                },
+            ));
         }
-        sort_entries(&mut self.trash_entries, SortBy::Modified, false, true);
-        self.trash_list_state.select(Some(0));
+
+        // Newest first.
+        rows.sort_by(|left, right| right.0.time_deleted.cmp(&left.0.time_deleted));
+
+        for (item, entry) in rows {
+            self.trash_items.push(item);
+            self.trash_entries.push(entry);
+        }
+
+        if self.trash_entries.is_empty() {
+            self.trash_list_state.select(None);
+            *self.trash_list_state.offset_mut() = 0;
+        } else {
+            self.trash_list_state.select(Some(0));
+        }
         Ok(())
+    }
+
+    /// The trash item that is currently highlighted.
+    fn selected_trash_item(&self) -> Option<&trash::TrashItem> {
+        self.trash_list_state
+            .selected()
+            .and_then(|index| self.trash_items.get(index))
     }
 
     fn rebuild_display(&mut self) {
@@ -822,14 +881,19 @@ impl App {
         }
 
         let show_tabs = self.tabs.len() > 1;
+        let in_trash = self.mode == AppMode::TrashBrowser;
         let areas = crate::ui::layout(
             area,
             self.show_preview,
-            self.config.ui.show_parent,
+            self.config.ui.show_parent && !in_trash,
             show_tabs,
         );
 
-        let current_title = dir_title(&self.current_path);
+        let current_title = if in_trash {
+            "Trash".to_string()
+        } else {
+            dir_title(&self.current_path)
+        };
 
         // Tab bar (only when there is more than one tab)
         if let Some(tabs_area) = areas.tabs {
@@ -854,8 +918,13 @@ impl App {
             frame,
             areas.top,
             &self.current_path,
-            self.display.len(),
+            if in_trash {
+                self.trash_entries.len()
+            } else {
+                self.display.len()
+            },
             colors,
+            if in_trash { Some("Trash") } else { None },
         );
 
         // Parent column (Miller style)
@@ -882,26 +951,64 @@ impl App {
         }
 
         // File list
-        self.list_inner = crate::ui::file_list::render(
-            frame,
-            areas.current,
-            &self.display,
-            &mut self.list_state,
-            colors,
-            self.config.ui.show_icons,
-            self.show_git,
-            &self.marked,
-            &current_title,
-            self.loading,
-        );
+        if in_trash {
+            self.list_inner = crate::ui::file_list::render(
+                frame,
+                areas.current,
+                &self.trash_entries,
+                &mut self.trash_list_state,
+                colors,
+                self.config.ui.show_icons,
+                false,
+                &self.marked,
+                &current_title,
+                false,
+            );
+        } else {
+            self.list_inner = crate::ui::file_list::render(
+                frame,
+                areas.current,
+                &self.display,
+                &mut self.list_state,
+                colors,
+                self.config.ui.show_icons,
+                self.show_git,
+                &self.marked,
+                &current_title,
+                self.loading,
+            );
+        }
 
         // Preview
         if let Some(preview_area) = areas.preview {
+            // In the trash the file itself is gone, so show where it came from.
+            let trash_preview = if in_trash {
+                self.trash_list_state
+                    .selected()
+                    .and_then(|index| self.trash_entries.get(index))
+                    .map(|entry| {
+                        PreviewContent::text(format!(
+                            "Deleted item\n\nName: {}\nOriginal path: {}\n\nPress r to restore it,\nd to delete it forever.",
+                            entry.name,
+                            entry.path.display()
+                        ))
+                    })
+            } else {
+                None
+            };
+
+            let content = trash_preview.as_ref().unwrap_or(&self.preview_content);
+            let protocol = if in_trash {
+                None
+            } else {
+                self.preview_protocol.as_mut()
+            };
+
             crate::ui::preview::render(
                 frame,
                 preview_area,
-                &self.preview_content,
-                self.preview_protocol.as_mut(),
+                content,
+                protocol,
                 colors,
                 self.preview_scroll,
                 self.preview_zoom,
@@ -1023,6 +1130,21 @@ impl App {
                     &self.config.ui.colors,
                 );
             }
+            AppMode::ConfirmPurge => {
+                let name = self
+                    .trash_list_state
+                    .selected()
+                    .and_then(|index| self.trash_entries.get(index))
+                    .map(|entry| entry.name.clone())
+                    .unwrap_or_default();
+                crate::ui::prompt::render_confirm(
+                    frame,
+                    area,
+                    " Delete forever ",
+                    &format!("Delete \"{name}\" permanently? This cannot be undone."),
+                    &self.config.ui.colors,
+                );
+            }
             AppMode::QueueManager => {
                 crate::ui::queue::render(
                     frame,
@@ -1079,6 +1201,7 @@ impl App {
                     AppMode::ConfirmDelete => self.handle_confirm_delete(key).await?,
                     AppMode::ConfirmQuit => self.handle_confirm_quit(key).await?,
                     AppMode::ConfirmOverwrite => self.handle_confirm_overwrite(key).await?,
+                    AppMode::ConfirmPurge => self.handle_confirm_purge(key).await?,
                     AppMode::Visual => self.handle_normal(key).await?,
                     AppMode::TrashBrowser => self.handle_trash(key).await?,
                     AppMode::OpenWith => self.handle_open_with(key).await?,
@@ -1097,6 +1220,35 @@ impl App {
 
     async fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) -> Result<()> {
         use crossterm::event::{MouseEventKind, MouseButton};
+
+        // The trash browser has its own list, so clicks and scrolling have to
+        // work on that list instead of the current directory.
+        if self.mode == AppMode::TrashBrowser {
+            match mouse.kind {
+                MouseEventKind::Down(MouseButton::Left) => {
+                    let inner = self.list_inner;
+                    if mouse.row >= inner.y
+                        && mouse.row < inner.y + inner.height
+                        && mouse.column >= inner.x
+                        && mouse.column < inner.x + inner.width
+                    {
+                        let index = self.trash_list_state.offset() + (mouse.row - inner.y) as usize;
+                        if index < self.trash_entries.len() {
+                            self.trash_list_state.select(Some(index));
+                        }
+                    }
+                }
+                MouseEventKind::ScrollUp => {
+                    previous(&mut self.trash_list_state, self.trash_entries.len());
+                }
+                MouseEventKind::ScrollDown => {
+                    next(&mut self.trash_list_state, self.trash_entries.len());
+                }
+                _ => {}
+            }
+            return Ok(());
+        }
+
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 let inner = self.list_inner;
@@ -1357,7 +1509,10 @@ impl App {
                         self.bookmark_state.select(Some(0));
                     }
                 }
-                Action::OpenTrash => self.mode = AppMode::TrashBrowser,
+                Action::OpenTrash => {
+                    self.mode = AppMode::TrashBrowser;
+                    self.refresh_trash().await?;
+                }
                 Action::OpenWith => self.mode = AppMode::OpenWith,
                 Action::QueueManager => {
                     self.mode = AppMode::QueueManager;
@@ -1987,11 +2142,11 @@ impl App {
 
     async fn handle_trash(&mut self, key: crossterm::event::KeyEvent) -> Result<()> {
         use crossterm::event::KeyCode;
-        use trash::os_limited::{list, restore_all};
 
         if key.code == KeyCode::Esc {
             self.mode = AppMode::Normal;
             self.trash_entries.clear();
+            self.trash_items.clear();
             return Ok(());
         }
 
@@ -2002,48 +2157,93 @@ impl App {
             KeyCode::Down | KeyCode::Char('j') => {
                 next(&mut self.trash_list_state, self.trash_entries.len());
             }
+            KeyCode::Home => {
+                self.trash_list_state.select(Some(0));
+                *self.trash_list_state.offset_mut() = 0;
+            }
+            KeyCode::End => {
+                if !self.trash_entries.is_empty() {
+                    self.trash_list_state.select(Some(self.trash_entries.len() - 1));
+                }
+            }
             KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right => {
-                if let Some(idx) = self.trash_list_state.selected() {
-                    if let Some(entry) = self.trash_entries.get(idx) {
-                        if entry.path.is_dir() {
-                            self.current_path = entry.path.clone();
+                // Jump to the folder the file was deleted from.
+                if let Some(entry) = self
+                    .trash_list_state
+                    .selected()
+                    .and_then(|index| self.trash_entries.get(index))
+                {
+                    let original = entry.path.clone();
+                    match original.parent() {
+                        Some(parent) if parent.is_dir() => {
                             self.mode = AppMode::Normal;
                             self.trash_entries.clear();
+                            self.trash_items.clear();
+                            self.clear_marks();
+                            self.current_path = parent.to_path_buf();
+                            self.search_query.clear();
+                            self.clear_listing();
                             self.refresh();
+                            return Ok(());
+                        }
+                        _ => {
+                            self.notice = Some(format!(
+                                "Deleted from {} (the folder is gone)",
+                                original.display()
+                            ));
                         }
                     }
                 }
             }
             KeyCode::Char('r') => {
-                if let Some(idx) = self.trash_list_state.selected() {
-                    if let Some(_entry) = self.trash_entries.get(idx) {
-                        // Need to get the TrashItem from the list to restore
-                        if let Ok(items) = list() {
-                            if let Some(trash_item) = items.get(idx) {
-                                if let Err(e) = restore_all(std::iter::once(trash_item.clone())) {
-                                    self.notice = Some(format!("Restore failed: {e}"));
-                                } else {
-                                    self.notice = Some("Restored".to_string());
-                                    self.refresh_trash().await?;
-                                }
-                            }
-                        }
+                let Some(item) = self.selected_trash_item().cloned() else {
+                    return Ok(());
+                };
+                use trash::os_limited::restore_all;
+                match restore_all(std::iter::once(item)) {
+                    Ok(()) => {
+                        self.notice = Some("Restored".to_string());
+                        self.refresh_trash().await?;
+                    }
+                    Err(error) => {
+                        self.notice = Some(format!("Restore failed: {error}"));
                     }
                 }
             }
             KeyCode::Delete | KeyCode::Char('d') => {
-                if let Some(idx) = self.trash_list_state.selected() {
-                    if let Some(entry) = self.trash_entries.get(idx) {
-                        if entry.path.is_dir() {
-                            let _ = tokio::fs::remove_dir_all(&entry.path).await;
-                        } else {
-                            let _ = tokio::fs::remove_file(&entry.path).await;
-                        }
-                        self.refresh_trash().await?;
-                    }
+                if self.selected_trash_item().is_some() {
+                    self.mode = AppMode::ConfirmPurge;
                 }
             }
             _ => {}
+        }
+        Ok(())
+    }
+
+    /// Permanent deletion of a trash item. This cannot be undone, so it asks
+    /// first.
+    async fn handle_confirm_purge(&mut self, key: crossterm::event::KeyEvent) -> Result<()> {
+        use crossterm::event::KeyCode;
+        use trash::os_limited::purge_all;
+
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                self.mode = AppMode::TrashBrowser;
+                if let Some(item) = self.selected_trash_item().cloned() {
+                    match purge_all(std::iter::once(item)) {
+                        Ok(()) => {
+                            self.notice = Some("Deleted permanently".to_string());
+                        }
+                        Err(error) => {
+                            self.notice = Some(format!("Could not delete: {error}"));
+                        }
+                    }
+                    self.refresh_trash().await?;
+                }
+            }
+            _ => {
+                self.mode = AppMode::TrashBrowser;
+            }
         }
         Ok(())
     }

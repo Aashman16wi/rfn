@@ -195,6 +195,7 @@ fn mode_style(mode: AppMode, accent: Color) -> (&'static str, Color) {
         AppMode::ConfirmDelete => ("DELETE", Color::Rgb(247, 118, 142)),
         AppMode::ConfirmQuit => ("QUIT", Color::Rgb(247, 118, 142)),
         AppMode::ConfirmOverwrite => ("OVERWRITE", Color::Rgb(224, 175, 104)),
+        AppMode::ConfirmPurge => ("PURGE", Color::Rgb(247, 118, 142)),
         AppMode::Visual => ("VISUAL", Color::Rgb(224, 175, 104)),
         AppMode::TrashBrowser => ("TRASH", Color::Rgb(247, 118, 142)),
         AppMode::OpenWith => ("OPEN WITH", Color::Rgb(224, 175, 104)),
