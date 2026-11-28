@@ -201,7 +201,7 @@ impl App {
         };
         let show_hidden = config.ui.show_hidden;
         let show_preview = config.preview.enabled;
-        let show_git = config.git.enabled;
+        let show_git = config.git.enabled && config.ui.show_git_status;
         let sort_by = config.behavior.sort_by;
         let reverse_sort = config.behavior.reverse_sort;
 
