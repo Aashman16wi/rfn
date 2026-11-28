@@ -7,8 +7,34 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Paragraph},
     Frame,
 };
+use unicode_width::UnicodeWidthStr;
 
-pub fn render(frame: &mut Frame, area: Rect, _keys: &KeyConfig, colors: &ColorConfig) {
+/// One line of the help: the keys on the left, what they do on the right.
+struct Entry {
+    keys: String,
+    description: &'static str,
+}
+
+fn section(title: &'static str, entries: Vec<Entry>) -> (String, Vec<Entry>) {
+    (title.to_string(), entries)
+}
+
+/// The keys of one action, as the user configured them.
+fn keys(keys: &[String]) -> String {
+    if keys.is_empty() {
+        return "not bound".to_string();
+    }
+    keys.join(" / ")
+}
+
+pub fn render(
+    frame: &mut Frame,
+    area: Rect,
+    key_config: &KeyConfig,
+    colors: &ColorConfig,
+    scroll: usize,
+    mut on_scroll: impl FnMut(usize, usize),
+) {
     let bg = parse_color(&colors.bg);
     let fg = parse_color(&colors.fg);
     let muted = parse_color(&colors.muted);
@@ -33,161 +59,173 @@ pub fn render(frame: &mut Frame, area: Rect, _keys: &KeyConfig, colors: &ColorCo
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    if inner.height == 0 || inner.width == 0 {
+        return;
+    }
 
-    let columns = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(inner);
-
-    let left_sections = vec![
-        (
+    // The list of what the keys do is built from the keys of the user, so
+    // the help never tells them something that is not true.
+    let sections = vec![
+        section(
             "Navigation",
             vec![
-                ("j / ↓", "Move down"),
-                ("k / ↑", "Move up"),
-                ("h / ←", "Parent directory"),
-                ("l / → / Enter", "Enter directory / open file"),
-                ("H / Ctrl+h", "Go to parent"),
-                ("~", "Go to home"),
-                ("G / End", "Go to bottom"),
-                ("Home", "Go to top"),
-                ("Ctrl+d / Ctrl+u", "Page down / up"),
+                Entry { keys: keys(&key_config.up), description: "Move up" },
+                Entry { keys: keys(&key_config.down), description: "Move down" },
+                Entry { keys: keys(&key_config.left), description: "Parent directory" },
+                Entry { keys: keys(&key_config.right), description: "Enter directory / open file" },
+                Entry { keys: keys(&key_config.enter), description: "Enter directory / open file" },
+                Entry { keys: keys(&key_config.goto_parent), description: "Go to parent" },
+                Entry { keys: keys(&key_config.goto_home), description: "Go to home" },
+                Entry { keys: "Ctrl+u / Ctrl+d".into(), description: "Page up / down" },
             ],
         ),
-        (
-            "Tabs",
-            vec![
-                ("t", "New tab"),
-                ("w", "Close tab"),
-                ("Tab / Shift+Tab", "Next / previous tab"),
-                ("1 – 9", "Jump to tab"),
-            ],
-        ),
-        (
-            "Bookmarks",
-            vec![
-                ("m", "Bookmark current directory"),
-                ("M", "Open bookmark list"),
-            ],
-        ),
-        (
+        section(
             "File operations",
             vec![
-                ("n", "New file"),
-                ("N", "New directory"),
-                ("r", "Rename"),
-                ("b", "Bulk rename in $EDITOR"),
-                ("d / Delete", "Delete (to trash)"),
-                ("y", "Copy (yank)"),
-                ("x", "Cut"),
-                ("p", "Paste"),
+                Entry { keys: keys(&key_config.new_file), description: "New file" },
+                Entry { keys: keys(&key_config.new_dir), description: "New directory" },
+                Entry { keys: keys(&key_config.rename), description: "Rename" },
+                Entry { keys: keys(&key_config.bulk_rename), description: "Bulk rename in $EDITOR" },
+                Entry { keys: keys(&key_config.delete), description: "Delete (to trash)" },
+                Entry { keys: keys(&key_config.copy), description: "Copy (yank)" },
+                Entry { keys: keys(&key_config.cut), description: "Cut" },
+                Entry { keys: keys(&key_config.paste), description: "Paste" },
             ],
         ),
-        (
-            "Queue & tools",
-            vec![
-                ("Q", "Transfer queue (r/c/d/u/o)"),
-                ("T", "Trash browser"),
-                ("o", "Open with..."),
-                ("Ctrl+t", "Change theme"),
-            ],
-        ),
-    ];
-
-    let right_sections = vec![
-        (
+        section(
             "Selection",
             vec![
-                ("v", "Visual select"),
-                ("Space", "Mark / unmark file"),
-                ("Esc", "Clear selection"),
+                Entry { keys: keys(&key_config.visual), description: "Visual select" },
+                Entry { keys: keys(&key_config.mark), description: "Mark / unmark file" },
+                Entry { keys: "Esc".into(), description: "Clear selection" },
             ],
         ),
-        (
+        section(
+            "Tabs",
+            vec![
+                Entry { keys: keys(&key_config.tab_new), description: "New tab" },
+                Entry { keys: keys(&key_config.tab_close), description: "Close tab" },
+                Entry { keys: keys(&key_config.tab_next), description: "Next tab" },
+                Entry { keys: keys(&key_config.tab_prev), description: "Previous tab" },
+                Entry { keys: "1 - 9".into(), description: "Jump to tab" },
+            ],
+        ),
+        section(
             "Preview",
             vec![
-                ("J / K", "Scroll preview down / up"),
-                ("= / -", "Zoom in / out"),
-                ("0", "Reset preview"),
+                Entry { keys: keys(&key_config.preview_scroll_down), description: "Scroll preview down" },
+                Entry { keys: keys(&key_config.preview_scroll_up), description: "Scroll preview up" },
+                Entry { keys: keys(&key_config.preview_zoom_in), description: "Zoom in" },
+                Entry { keys: keys(&key_config.preview_zoom_out), description: "Zoom out" },
+                Entry { keys: keys(&key_config.preview_reset), description: "Reset preview" },
             ],
         ),
-        (
+        section(
             "View",
             vec![
-                (".", "Toggle hidden files"),
-                ("P", "Toggle preview"),
-                ("g", "Toggle git status"),
-                ("R / Ctrl+r", "Refresh"),
+                Entry { keys: keys(&key_config.toggle_hidden), description: "Toggle hidden files" },
+                Entry { keys: keys(&key_config.toggle_preview), description: "Toggle preview" },
+                Entry { keys: keys(&key_config.toggle_git), description: "Toggle git status" },
+                Entry { keys: keys(&key_config.refresh), description: "Refresh" },
+                Entry { keys: keys(&key_config.sort), description: "Cycle sort field" },
+                Entry { keys: keys(&key_config.reverse_sort), description: "Reverse order" },
             ],
         ),
-        (
-            "Sorting",
-            vec![("s", "Cycle name → size → time → ext"), ("S", "Reverse order")],
-        ),
-        (
-            "Other",
+        section(
+            "Tools",
             vec![
-                ("/", "Search"),
-                ("?", "Toggle help"),
-                ("q / Ctrl+c", "Quit"),
-                ("", ""),
+                Entry { keys: keys(&key_config.queue), description: "Transfer queue" },
+                Entry { keys: keys(&key_config.trash), description: "Trash browser" },
+                Entry { keys: keys(&key_config.open_with), description: "Open with a command" },
+                Entry { keys: keys(&key_config.bookmark_add), description: "Bookmark this directory" },
+                Entry { keys: keys(&key_config.bookmark_jump), description: "Open the bookmark list" },
+                Entry { keys: keys(&key_config.theme), description: "Change the theme" },
+                Entry { keys: keys(&key_config.search), description: "Search" },
+                Entry { keys: keys(&key_config.help), description: "Toggle this help" },
+                Entry { keys: keys(&key_config.quit), description: "Quit" },
             ],
         ),
     ];
 
-    let mut left_lines = Vec::new();
-    for (title, items) in left_sections {
-        push_section(&mut left_lines, title, items, accent, fg, muted);
+    // Every line of the help, so the two columns can be cut from the same
+    // The width of the key column follows the longest key, plus a gap, so
+    // nothing is pushed out of the window.
+    let key_width = sections
+        .iter()
+        .flat_map(|(_, entries)| entries.iter())
+        .map(|entry| entry.keys.width())
+        .max()
+        .unwrap_or(10)
+        .saturating_add(2)
+        .clamp(8, 20);
+
+    // Every line of the help, so the columns can be cut from the same list
+    // and scroll together.
+    let mut lines: Vec<Line> = Vec::new();
+    for (title, entries) in &sections {
+        lines.push(Line::from(Span::styled(
+            format!("  {title}"),
+            Style::default().fg(accent).add_modifier(Modifier::BOLD),
+        )));
+        for entry in entries {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("   {:<width$}", entry.keys, width = key_width),
+                    Style::default().fg(fg).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(entry.description, Style::default().fg(muted)),
+            ]));
+        }
+        lines.push(Line::from(""));
     }
 
-    let mut right_lines = Vec::new();
-    for (title, items) in right_sections {
-        push_section(&mut right_lines, title, items, accent, fg, muted);
-    }
+    // A narrow window gets one column, so the text is not cut off. A wide
+    // one gets two columns, so everything fits without scrolling.
+    let wide = area.width >= 100;
+    let rows = inner.height.saturating_sub(1) as usize; // one row for the footer
+    let total = lines.len();
+    // The last page: every column that is filled.
+    let per_page = if wide { 2 * rows } else { rows };
+    let max_scroll = total.saturating_sub(per_page);
+    let scroll = scroll.min(max_scroll);
+    on_scroll(scroll, max_scroll);
 
-    frame.render_widget(
-        Paragraph::new(left_lines).style(Style::default().bg(bg)),
-        columns[0],
-    );
-    frame.render_widget(
-        Paragraph::new(right_lines).style(Style::default().bg(bg)),
-        columns[1],
-    );
+    if wide {
+        let columns = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(inner);
+
+        let first: Vec<Line> = lines.iter().skip(scroll).take(rows).cloned().collect();
+        let second: Vec<Line> = lines
+            .iter()
+            .skip(scroll + rows)
+            .take(rows)
+            .cloned()
+            .collect();
+
+        frame.render_widget(Paragraph::new(first).style(Style::default().bg(bg)), columns[0]);
+        frame.render_widget(Paragraph::new(second).style(Style::default().bg(bg)), columns[1]);
+    } else {
+        let shown: Vec<Line> = lines.iter().skip(scroll).take(rows).cloned().collect();
+        frame.render_widget(Paragraph::new(shown).style(Style::default().bg(bg)), inner);
+    }
 
     // Footer hint
-    if inner.height > 2 {
+    if inner.height > 1 {
         let hint_area = Rect::new(inner.x, inner.y + inner.height - 1, inner.width, 1);
+        let more = if scroll + per_page < total {
+            " (more below) "
+        } else {
+            ""
+        };
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
-                " press ? or Esc to close ",
+                format!(" j/k scroll   ? or Esc to close {more}"),
                 Style::default().fg(muted),
             )))
             .style(Style::default().bg(bg)),
             hint_area,
         );
     }
-}
-
-fn push_section<'a>(
-    lines: &mut Vec<Line<'a>>,
-    title: &'a str,
-    items: Vec<(&'a str, &'a str)>,
-    accent: ratatui::style::Color,
-    fg: ratatui::style::Color,
-    muted: ratatui::style::Color,
-) {
-    lines.push(Line::from(Span::styled(
-        format!("  {title}"),
-        Style::default().fg(accent).add_modifier(Modifier::BOLD),
-    )));
-    for (key, desc) in items {
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!("   {:<16}", key),
-                Style::default().fg(fg).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(desc, Style::default().fg(muted)),
-        ]));
-    }
-    lines.push(Line::from(""));
 }

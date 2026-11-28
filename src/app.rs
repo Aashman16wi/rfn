@@ -178,6 +178,8 @@ pub struct App {
     git_loading: bool,
 
     help_visible: bool,
+    help_scroll: usize,
+    help_max_scroll: usize,
     notice: Option<String>,
     pending_bulk_rename: bool,
 
@@ -255,6 +257,8 @@ impl App {
             loading: false,
             git_loading: false,
             help_visible: false,
+            help_scroll: 0,
+            help_max_scroll: 0,
             notice: None,
             pending_bulk_rename: false,
             should_quit: false,
@@ -886,7 +890,12 @@ impl App {
         );
 
         if self.help_visible {
-            render_help(frame, area, &self.config.keys, colors);
+            let mut scroll = self.help_scroll;
+            render_help(frame, area, &self.config.keys, colors, scroll, |value, max| {
+                scroll = value;
+                self.help_scroll = value;
+                self.help_max_scroll = max;
+            });
             return;
         }
 
@@ -1440,7 +1449,10 @@ impl App {
                         self.rebuild_display();
                     }
                 }
-                Action::Help => self.help_visible = !self.help_visible,
+                Action::Help => {
+                    self.help_visible = !self.help_visible;
+                    self.help_scroll = 0;
+                }
                 Action::Refresh => self.refresh(),
                 Action::GotoParent => self.go_parent().await?,
                 Action::GotoHome => self.go_home().await?,
@@ -1696,9 +1708,28 @@ impl App {
         match key.code {
             crossterm::event::KeyCode::Char('?') | crossterm::event::KeyCode::Esc => {
                 self.help_visible = false;
+                self.help_scroll = 0;
             }
             crossterm::event::KeyCode::Char('q') => {
                 self.should_quit = true;
+            }
+            crossterm::event::KeyCode::Down | crossterm::event::KeyCode::Char('j') => {
+                self.help_scroll = self.help_scroll.saturating_add(1);
+            }
+            crossterm::event::KeyCode::Up | crossterm::event::KeyCode::Char('k') => {
+                self.help_scroll = self.help_scroll.saturating_sub(1);
+            }
+            crossterm::event::KeyCode::PageDown => {
+                self.help_scroll = self.help_scroll.saturating_add(10);
+            }
+            crossterm::event::KeyCode::PageUp => {
+                self.help_scroll = self.help_scroll.saturating_sub(10);
+            }
+            crossterm::event::KeyCode::Home => {
+                self.help_scroll = 0;
+            }
+            crossterm::event::KeyCode::End => {
+                self.help_scroll = self.help_max_scroll;
             }
             _ => {}
         }
