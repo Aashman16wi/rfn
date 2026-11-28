@@ -37,8 +37,10 @@ def record(name, ok, detail=""):
 
 
 class App:
-    def __init__(self, path=None, env=None):
+    def __init__(self, path=None, env=None, cols=None, rows=None):
         self.buffer = bytearray()
+        self.cols = cols or COLS
+        self.rows = rows or ROWS
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
             os.environ["TERM"] = "xterm-256color"
@@ -51,7 +53,8 @@ class App:
             if path:
                 args.append(path)
             os.execv(RFN, args)
-        fcntl.ioctl(self.fd, termios.TIOCSWINSZ, struct.pack("HHHH", ROWS, COLS, 0, 0))
+        fcntl.ioctl(self.fd, termios.TIOCSWINSZ,
+                    struct.pack("HHHH", self.rows, self.cols, 0, 0))
         self.drain(1.5)
 
     def drain(self, seconds):
@@ -95,7 +98,7 @@ class App:
         self.drain_until_quiet(quiet=wait)
 
     def screen(self):
-        screen = pyte.Screen(COLS, ROWS)
+        screen = pyte.Screen(self.cols, self.rows)
         pyte.Stream(screen).feed(self.buffer.decode("utf-8", "replace"))
         return screen
 
@@ -103,10 +106,10 @@ class App:
         return "\n".join(line.rstrip() for line in self.screen().display)
 
     def status(self):
-        return self.screen().display[ROWS - 1].rstrip()
+        return self.screen().display[self.rows - 1].rstrip()
 
     def pane(self):
-        return "\n".join(self.screen().display[1:ROWS - 2])
+        return "\n".join(self.screen().display[1:self.rows - 2])
 
     def has(self, needle):
         return needle.lower() in self.text().lower()
@@ -339,6 +342,83 @@ def main():
     time.sleep(1.5)
     record("a folder can be deleted", not os.path.exists(f"{base}/gone"),
            str(os.listdir(base)))
+    app.close()
+
+    # ------------------------------------- the config keeps the user's text
+    # A theme change must only touch the name of the theme. The comments,
+    # the spacing and the order of the sections belong to the user.
+    user_config = (
+        "# a comment of the user\n"
+        "[ui]\n"
+        'theme = "tokyo-night"\n'
+        "\n"
+        "# another comment\n"
+        "[behavior]\n"
+        "sort_dirs_first = false # keep\n"
+    )
+    os.makedirs(os.path.dirname(CONFIG), exist_ok=True)
+    with open(CONFIG, "w") as handle:
+        handle.write(user_config)
+
+    result = subprocess.run([RFN, "--theme", "nord"], capture_output=True,
+                            env={**os.environ, "HOME": ROOT})
+    record("--theme exits 0", result.returncode == 0, result.stderr.decode())
+    with open(CONFIG) as handle:
+        saved = handle.read()
+    record("the comment of the user survives a theme change",
+           "# a comment of the user" in saved, saved[:300])
+    record("the second comment survives a theme change",
+           "# another comment" in saved, saved[:300])
+    record("the comment behind a setting survives a theme change",
+           "# keep" in saved, saved[:300])
+    record("the order of the sections survives a theme change",
+           "ui" in saved and saved.index("[ui]") < saved.index("[behavior]"),
+           saved[:300])
+    record("only the name of the theme changed",
+           saved.count("theme = ") == 1 and 'theme = "nord"' in saved, saved[:300])
+
+    # The same has to be true when the theme is picked inside the app.
+    base = tree("comments")
+    app = App(base)
+    app.key(b"\x14")
+    time.sleep(0.6)
+    app.key(b"j")
+    time.sleep(0.3)
+    app.key(b"\r")
+    time.sleep(0.8)
+    app.close()
+    with open(CONFIG) as handle:
+        saved = handle.read()
+    record("the comment of the user survives a theme change in the app",
+           "# a comment of the user" in saved, saved[:300])
+    record("the order of the sections survives a theme change in the app",
+           saved.index("[ui]") < saved.index("[behavior]"), saved[:300])
+
+    # ------------------------------------------- a broken color is harmless
+    with open(CONFIG, "w") as handle:
+        handle.write('[ui]\ntheme = "custom"\n\n[ui.colors]\nbg = "#aébcd"\n')
+    app = App(base)
+    time.sleep(0.5)
+    record("a color with a multi byte character does not crash the app",
+           app.alive(), app.text()[-300:])
+    record("the app still lists the files", app.has("comments"), app.pane())
+    app.close()
+
+    # ----------------------------------------- the popups stay in the window
+    with open(CONFIG, "w") as handle:
+        handle.write('[ui]\ntheme = "tokyo-night"\n')
+    app = App(base, cols=24, rows=24)
+    app.key(b"\x14")
+    time.sleep(0.5)
+    record("the theme picker does not crash on a narrow terminal",
+           app.alive(), app.text()[-300:])
+    app.close()
+
+    app = App(base, cols=24, rows=24)
+    app.key(b"M")
+    time.sleep(0.5)
+    record("the bookmark list does not crash on a narrow terminal",
+           app.alive(), app.text()[-300:])
     app.close()
 
     print("\n" + "=" * 60)
