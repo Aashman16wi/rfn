@@ -200,6 +200,7 @@ fn mode_style(mode: AppMode, accent: Color) -> (&'static str, Color) {
         AppMode::OpenWith => ("OPEN WITH", Color::Rgb(224, 175, 104)),
         AppMode::QueueManager => ("QUEUE", Color::Rgb(152, 195, 121)),
         AppMode::ThemePicker => ("THEME", Color::Rgb(187, 154, 247)),
+        AppMode::BookmarkPicker => ("BOOKMARKS", Color::Rgb(137, 180, 250)),
     }
 }
 

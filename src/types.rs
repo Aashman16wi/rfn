@@ -125,6 +125,7 @@ pub enum AppMode {
     OpenWith,
     QueueManager,
     ThemePicker,
+    BookmarkPicker,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

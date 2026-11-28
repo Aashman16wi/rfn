@@ -146,6 +146,7 @@ pub struct App {
     mode: AppMode,
     overwrite_count: usize,
     theme_index: usize,
+    bookmark_state: ratatui::widgets::ListState,
     search_query: String,
     rename_buffer: String,
     new_name_buffer: String,
@@ -225,6 +226,7 @@ impl App {
             mode: AppMode::Normal,
             overwrite_count: 0,
             theme_index: 0,
+            bookmark_state: ratatui::widgets::ListState::default(),
             search_query: String::new(),
             rename_buffer: String::new(),
             new_name_buffer: String::new(),
@@ -1041,6 +1043,15 @@ impl App {
                     &self.config.ui.colors,
                 );
             }
+            AppMode::BookmarkPicker => {
+                crate::ui::bookmarks::render(
+                    frame,
+                    area,
+                    &self.bookmarks,
+                    &mut self.bookmark_state,
+                    &self.config.ui.colors,
+                );
+            }
             _ => {}
         }
     }
@@ -1073,6 +1084,7 @@ impl App {
                     AppMode::OpenWith => self.handle_open_with(key).await?,
                     AppMode::QueueManager => self.handle_queue(key).await?,
                     AppMode::ThemePicker => self.handle_theme_picker(key),
+                    AppMode::BookmarkPicker => self.handle_bookmark_picker(key).await?,
                 }
             }
             Event::Mouse(mouse) => {
@@ -1338,9 +1350,11 @@ impl App {
                     }
                 }
                 Action::BookmarkJump => {
-                    if !self.bookmarks.is_empty() {
-                        self.current_path = self.bookmarks[0].clone();
-                        self.refresh();
+                    self.mode = AppMode::BookmarkPicker;
+                    if self.bookmarks.is_empty() {
+                        self.bookmark_state.select(None);
+                    } else {
+                        self.bookmark_state.select(Some(0));
                     }
                 }
                 Action::OpenTrash => self.mode = AppMode::TrashBrowser,
@@ -2195,6 +2209,94 @@ impl App {
                 .unwrap_or(0)
                 .min(self.queue.len() - 1);
             self.queue_state.select(Some(selected));
+        }
+    }
+
+    /// Bookmark picker: j/k to move, Enter to jump, a to add, d to remove.
+    async fn handle_bookmark_picker(&mut self, key: crossterm::event::KeyEvent) -> Result<()> {
+        use crossterm::event::KeyCode;
+
+        let len = self.bookmarks.len();
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => self.mode = AppMode::Normal,
+            KeyCode::Down | KeyCode::Char('j') => {
+                if len > 0 {
+                    let next = self
+                        .bookmark_state
+                        .selected()
+                        .map(|index| (index + 1).min(len - 1))
+                        .unwrap_or(0);
+                    self.bookmark_state.select(Some(next));
+                }
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if len > 0 {
+                    let previous = self
+                        .bookmark_state
+                        .selected()
+                        .map(|index| index.saturating_sub(1))
+                        .unwrap_or(0);
+                    self.bookmark_state.select(Some(previous));
+                }
+            }
+            KeyCode::Home => {
+                if len > 0 {
+                    self.bookmark_state.select(Some(0));
+                }
+            }
+            KeyCode::End => {
+                if len > 0 {
+                    self.bookmark_state.select(Some(len - 1));
+                }
+            }
+            KeyCode::Char('a') => {
+                if !self.bookmarks.contains(&self.current_path) {
+                    self.bookmarks.push(self.current_path.clone());
+                    self.notice = Some("Bookmark added".to_string());
+                } else {
+                    self.notice = Some("Already bookmarked".to_string());
+                }
+                self.fix_bookmark_selection();
+            }
+            KeyCode::Char('d') => {
+                if let Some(index) = self.bookmark_state.selected() {
+                    if index < self.bookmarks.len() {
+                        self.bookmarks.remove(index);
+                        self.notice = Some("Bookmark removed".to_string());
+                    }
+                }
+                self.fix_bookmark_selection();
+            }
+            KeyCode::Enter => {
+                if let Some(index) = self.bookmark_state.selected() {
+                    if let Some(path) = self.bookmarks.get(index).cloned() {
+                        self.mode = AppMode::Normal;
+                        self.clear_marks();
+                        self.current_path = path;
+                        self.search_query.clear();
+                        self.clear_listing();
+                        self.refresh();
+                        return Ok(());
+                    }
+                }
+                self.mode = AppMode::Normal;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn fix_bookmark_selection(&mut self) {
+        if self.bookmarks.is_empty() {
+            self.bookmark_state.select(None);
+            *self.bookmark_state.offset_mut() = 0;
+        } else {
+            let selected = self
+                .bookmark_state
+                .selected()
+                .unwrap_or(0)
+                .min(self.bookmarks.len() - 1);
+            self.bookmark_state.select(Some(selected));
         }
     }
 

@@ -313,7 +313,7 @@ KEYBINDINGS:
         P               Toggle preview
         g               Toggle git status
         R / Ctrl+r      Refresh
-        m / M           Add bookmark / jump to bookmark
+        m / M           Bookmark current dir / bookmark list
         J / K / 0       Scroll preview / reset
         Ctrl+t          Change theme (in-app picker)
 

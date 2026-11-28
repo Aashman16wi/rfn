@@ -1,3 +1,4 @@
+pub mod bookmarks;
 pub mod file_list;
 pub mod format;
 pub mod help;

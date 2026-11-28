@@ -64,10 +64,10 @@ pub fn render(frame: &mut Frame, area: Rect, _keys: &KeyConfig, colors: &ColorCo
             ],
         ),
         (
-            "Session",
+            "Bookmarks",
             vec![
                 ("m", "Bookmark current directory"),
-                ("M", "Jump to bookmark"),
+                ("M", "Open bookmark list"),
             ],
         ),
         (
