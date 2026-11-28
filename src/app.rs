@@ -736,6 +736,10 @@ impl App {
             }
         };
 
+        // Every file starts at the top, a scroll from the file before it
+        // would hide the first lines of this one.
+        self.preview_scroll = 0;
+
         let max_size = self.config.preview.max_size;
         let show_images = self.config.preview.show_images;
         let show_icons = self.config.ui.show_icons;
@@ -1330,7 +1334,7 @@ impl App {
                     return Ok(());
                 }
                 KeyCode::Char('u') => {
-                    page_up(&mut self.list_state, page);
+                    page_up(&mut self.list_state, self.display.len(), page);
                     if self.mode == AppMode::Visual {
                         self.mark_current();
                     }
@@ -1350,7 +1354,7 @@ impl App {
                 return Ok(());
             }
             KeyCode::PageUp => {
-                page_up(&mut self.list_state, page);
+                page_up(&mut self.list_state, self.display.len(), page);
                 if self.mode == AppMode::Visual {
                     self.mark_current();
                 }
@@ -1358,7 +1362,7 @@ impl App {
                 return Ok(());
             }
             KeyCode::Home => {
-                go_to_top(&mut self.list_state);
+                go_to_top(&mut self.list_state, self.display.len());
                 if self.mode == AppMode::Visual {
                     self.mark_current();
                 }

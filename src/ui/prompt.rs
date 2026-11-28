@@ -25,6 +25,13 @@ pub fn render_input(
         _ => return,
     };
 
+    // The label takes the first columns, the text gets the rest.
+    let prefix = label.width() + 3;
+    let available = area.width.saturating_sub(prefix as u16).max(1) as usize;
+    // Long text scrolls to the left, so the caret stays on the last
+    // character that is visible.
+    let visible = tail_by_width(buffer, available);
+
     let line = Line::from(vec![
         Span::styled(
             format!(" {label} "),
@@ -34,7 +41,7 @@ pub fn render_input(
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(" "),
-        Span::styled(buffer.to_string(), Style::default().fg(Color::White)),
+        Span::styled(visible.to_string(), Style::default().fg(Color::White)),
     ]);
 
     let paragraph = Paragraph::new(line)
@@ -42,10 +49,61 @@ pub fn render_input(
 
     frame.render_widget(paragraph, area);
 
-    let prefix = label.width() + 3;
-    let x = area.x + prefix as u16 + buffer.width() as u16;
-    let x = x.min(area.x + area.width.saturating_sub(1));
+    let x = area
+        .x
+        .saturating_add(prefix as u16)
+        .saturating_add(visible.width() as u16)
+        .min(area.x + area.width.saturating_sub(1));
     frame.set_cursor_position((x, area.y));
+}
+
+/// The end of the text that fits into `columns` columns.
+fn tail_by_width(text: &str, columns: usize) -> &str {
+    use unicode_width::UnicodeWidthChar;
+
+    let mut width = 0;
+    let mut cut = text.len();
+    for (index, character) in text.char_indices().rev() {
+        let character_width = UnicodeWidthChar::width(character).unwrap_or(0);
+        if width + character_width > columns {
+            break;
+        }
+        width += character_width;
+        cut = index;
+    }
+    &text[cut..]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn short_text_stays_as_it_is() {
+        assert_eq!(tail_by_width("hello", 10), "hello");
+    }
+
+    #[test]
+    fn long_text_keeps_its_end() {
+        assert_eq!(tail_by_width("hello world", 5), "world");
+    }
+
+    #[test]
+    fn a_multi_byte_character_is_never_cut_in_half() {
+        // Every letter is one column wide, so two of them fit.
+        let text = "äöü";
+        let tail = tail_by_width(text, 2);
+        assert_eq!(tail, "öü");
+    }
+
+    #[test]
+    fn the_width_of_the_tail_is_never_bigger_than_the_room() {
+        for length in 0..40 {
+            let text = "ä".repeat(length);
+            let tail = tail_by_width(&text, 7);
+            assert!(tail.width() <= 7, "{tail:?} is wider than 7");
+        }
+    }
 }
 
 pub fn render_confirm(

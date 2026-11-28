@@ -64,17 +64,22 @@ pub fn render(
             "[No preview]",
             Style::default().fg(muted),
         ))],
-        PreviewType::Text => content
-            .content
-            .lines()
-            .skip(scroll)
-            .map(|line| {
-                Line::from(Span::styled(
-                    line.to_string(),
-                    Style::default().fg(parse_color(&colors.fg)),
-                ))
-            })
-            .collect(),
+        PreviewType::Text => {
+            let lines: Vec<&str> = content.content.lines().collect();
+            // Scrolling past the end of the file must not empty the pane,
+            // and a shorter file must not stay scrolled away.
+            let scroll = scroll.min(lines.len().saturating_sub(1));
+            lines
+                .into_iter()
+                .skip(scroll)
+                .map(|line| {
+                    Line::from(Span::styled(
+                        line.to_string(),
+                        Style::default().fg(parse_color(&colors.fg)),
+                    ))
+                })
+                .collect()
+        }
     };
 
     let paragraph = Paragraph::new(text)

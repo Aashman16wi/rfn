@@ -118,7 +118,9 @@ pub fn render(
                     .file_name()
                     .and_then(|name| name.to_str())
                     .unwrap_or("?");
-                let dst = display_path(item.dst.parent().unwrap_or(&item.dst));
+                // The destination is the whole path, the name of the file
+                // that will be created is part of it.
+                let dst = display_path(&item.dst);
 
                 let mut spans = vec![
                     Span::styled(

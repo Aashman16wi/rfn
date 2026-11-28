@@ -322,7 +322,11 @@ pub fn page_down(state: &mut ListState, len: usize, page_size: usize) {
     state.select(Some(i));
 }
 
-pub fn page_up(state: &mut ListState, page_size: usize) {
+pub fn page_up(state: &mut ListState, len: usize, page_size: usize) {
+    if len == 0 {
+        state.select(None);
+        return;
+    }
     let i = match state.selected() {
         Some(i) => i.saturating_sub(page_size),
         None => 0,
@@ -330,7 +334,11 @@ pub fn page_up(state: &mut ListState, page_size: usize) {
     state.select(Some(i));
 }
 
-pub fn go_to_top(state: &mut ListState) {
+pub fn go_to_top(state: &mut ListState, len: usize) {
+    if len == 0 {
+        state.select(None);
+        return;
+    }
     state.select(Some(0));
 }
 

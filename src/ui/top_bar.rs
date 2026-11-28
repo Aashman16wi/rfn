@@ -112,20 +112,21 @@ pub fn render(
 
         for (index, segment) in segments.iter().enumerate() {
             let is_last = index == segments.len() - 1;
-            let piece = if index == 0 {
-                segment.clone()
-            } else {
-                format!("› {segment}")
-            };
 
-            let piece_width = piece.width();
+            // The separator goes in front of every segment but the first.
+            // Its width has to be counted, otherwise the path grows longer
+            // than the room that was measured for it and it runs into the
+            // item count on the right.
+            let separator = if index > 0 { 3 } else { 0 };
+            let piece_width = separator + segment.width();
+
             if used + piece_width > available {
                 break;
             }
             used += piece_width;
 
             if index > 0 {
-                spans.push(Span::styled(" ", Style::default().fg(muted)));
+                spans.push(Span::styled(" › ", Style::default().fg(muted)));
             }
 
             spans.push(Span::styled(
@@ -136,10 +137,6 @@ pub fn render(
                     Style::default().fg(fg)
                 },
             ));
-
-            if !is_last {
-                spans.push(Span::styled(" › ", Style::default().fg(muted)));
-            }
         }
     }
 

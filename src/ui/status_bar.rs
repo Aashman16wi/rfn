@@ -175,7 +175,7 @@ pub fn render(
     let right_width: usize = right.iter().map(|span| span.content.width()).sum();
     let total = area.width as usize;
 
-    if left_width + right_width < total {
+    if left_width + right_width <= total {
         let gap = total - left_width - right_width;
         left.push(Span::raw(" ".repeat(gap)));
         left.extend(right);
