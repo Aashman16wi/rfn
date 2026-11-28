@@ -17,7 +17,7 @@ pub fn render(
     protocol: Option<&mut StatefulProtocol>,
     colors: &ColorConfig,
     scroll: usize,
-    _zoom: f32,
+    zoom: f32,
 ) {
     let block = Block::default()
         .title(Line::from(Span::styled(
@@ -38,11 +38,14 @@ pub fn render(
 
     if content.preview_type == PreviewType::Image {
         if let Some(protocol) = protocol {
-            frame.render_stateful_widget(
-                StatefulImage::new().resize(Resize::Fit(None)),
-                inner,
-                protocol,
-            );
+            // Zoomed in: crop the picture so the detail is bigger than the
+            // pane. Zoomed out: fit the whole picture.
+            let resize = if zoom >= 1.05 {
+                Resize::Crop(None)
+            } else {
+                Resize::Fit(None)
+            };
+            frame.render_stateful_widget(StatefulImage::new().resize(resize), inner, protocol);
             return;
         }
     }

@@ -679,6 +679,8 @@ impl App {
 
                 match decoded {
                     Ok(img) => {
+                        let zoom = self.preview_zoom.clamp(0.25, 4.0);
+                        let img = zoom_image(img, zoom);
                         self.preview_protocol = Some(self.picker.new_resize_protocol(img));
                     }
                     Err(e) => {
@@ -1317,14 +1319,17 @@ impl App {
                     self.preview_scroll += 5;
                 }
                 Action::PreviewZoomIn => {
-                    self.preview_zoom = (self.preview_zoom * 1.2).min(4.0);
+                    self.preview_zoom = (self.preview_zoom * 1.25).min(4.0);
+                    self.update_preview().await;
                 }
                 Action::PreviewZoomOut => {
-                    self.preview_zoom = (self.preview_zoom / 1.2).max(0.25);
+                    self.preview_zoom = (self.preview_zoom / 1.25).max(0.25);
+                    self.update_preview().await;
                 }
                 Action::PreviewReset => {
                     self.preview_scroll = 0;
                     self.preview_zoom = 1.0;
+                    self.update_preview().await;
                 }
                 Action::BookmarkAdd => {
                     if !self.bookmarks.contains(&self.current_path) {
@@ -2292,6 +2297,29 @@ fn dir_title(path: &Path) -> String {
         .and_then(|name| name.to_str())
         .map(|name| name.to_string())
         .unwrap_or_else(|| path.display().to_string())
+}
+
+/// Scale an image for the preview. Zooming in makes the picture bigger so
+/// details are visible; zooming out fits the whole picture in the pane.
+fn zoom_image(img: image::DynamicImage, zoom: f32) -> image::DynamicImage {
+    if (zoom - 1.0).abs() < 0.01 {
+        return img;
+    }
+
+    const MAX_DIMENSION: u32 = 4096;
+    let width = ((img.width() as f32 * zoom).round() as u32).max(1);
+    let height = ((img.height() as f32 * zoom).round() as u32).max(1);
+    let (width, height) = if width > MAX_DIMENSION || height > MAX_DIMENSION {
+        let scale = MAX_DIMENSION as f32 / width.max(height) as f32;
+        (
+            ((width as f32 * scale) as u32).max(1),
+            ((height as f32 * scale) as u32).max(1),
+        )
+    } else {
+        (width, height)
+    };
+
+    img.resize(width, height, image::imageops::FilterType::Triangle)
 }
 
 async fn execute_queue_item(item: &QueueItem) -> std::result::Result<(), String> {
