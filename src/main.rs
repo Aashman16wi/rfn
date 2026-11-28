@@ -113,8 +113,10 @@ fn color_enabled() -> bool {
 }
 
 fn hex_rgb(hex: &str) -> Option<(u8, u8, u8)> {
+    // The color comes from a config file, so it can hold anything. Slicing
+    // it at fixed byte offsets would panic on a multi byte character.
     let hex = hex.strip_prefix('#')?;
-    if hex.len() != 6 {
+    if hex.len() != 6 || !hex.is_ascii() {
         return None;
     }
     let red = u8::from_str_radix(&hex[0..2], 16).ok()?;
@@ -329,4 +331,20 @@ KEYBINDINGS:
         ?               Toggle help
         q / Ctrl+c      Quit
 "#);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_color_with_a_multi_byte_character_does_not_panic() {
+        assert_eq!(hex_rgb("#aébcd"), None);
+        assert_eq!(hex_rgb("#é"), None);
+    }
+
+    #[test]
+    fn a_valid_color_is_parsed() {
+        assert_eq!(hex_rgb("#7aa2f7"), Some((0x7a, 0xa2, 0xf7)));
+    }
 }

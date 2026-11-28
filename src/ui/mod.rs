@@ -99,12 +99,51 @@ pub fn layout(
 }
 
 pub fn parse_color(s: &str) -> Color {
-    if s.starts_with('#') && s.len() == 7 {
-        let r = u8::from_str_radix(&s[1..3], 16).unwrap_or(255);
-        let g = u8::from_str_radix(&s[3..5], 16).unwrap_or(255);
-        let b = u8::from_str_radix(&s[5..7], 16).unwrap_or(255);
-        Color::Rgb(r, g, b)
-    } else {
-        Color::White
+    // A color comes from the config file, so it can be anything the user
+    // typed. Slicing it at fixed byte offsets would panic on a name with a
+    // multi byte character in it.
+    let Some(hex) = s.strip_prefix('#') else {
+        return Color::White;
+    };
+    if hex.len() != 6 || !hex.is_ascii() {
+        return Color::White;
+    }
+    let Some(red) = u8::from_str_radix(&hex[0..2], 16).ok() else {
+        return Color::White;
+    };
+    let Some(green) = u8::from_str_radix(&hex[2..4], 16).ok() else {
+        return Color::White;
+    };
+    let Some(blue) = u8::from_str_radix(&hex[4..6], 16).ok() else {
+        return Color::White;
+    };
+    Color::Rgb(red, green, blue)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_valid_color_is_parsed() {
+        assert_eq!(parse_color("#7aa2f7"), Color::Rgb(0x7a, 0xa2, 0xf7));
+    }
+
+    #[test]
+    fn a_color_with_a_multi_byte_character_does_not_panic() {
+        // Seven bytes, but the second character takes two of them, so a
+        // slice at byte 2 would cut it in half.
+        let _ = parse_color("#aébcd");
+        let _ = parse_color("#abcdé");
+        let _ = parse_color("#é");
+    }
+
+    #[test]
+    fn a_broken_color_falls_back_instead_of_panicking() {
+        assert_eq!(parse_color(""), Color::White);
+        assert_eq!(parse_color("7aa2f7"), Color::White);
+        assert_eq!(parse_color("#7aa2f"), Color::White);
+        assert_eq!(parse_color("#7aa2f77"), Color::White);
+        assert_eq!(parse_color("#gggggg"), Color::White);
     }
 }
