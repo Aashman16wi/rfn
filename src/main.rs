@@ -293,7 +293,7 @@ KEYBINDINGS:
         x               Cut
         p               Paste (queued in the background)
         Q               Open the transfer queue
-        T               Trash browser
+        T               Trash browser (r restore, d delete forever)
         o               Open with...
         b               Bulk rename marked files
 
@@ -313,8 +313,11 @@ KEYBINDINGS:
         P               Toggle preview
         g               Toggle git status
         R / Ctrl+r      Refresh
-        m / M           Bookmark current dir / bookmark list
-        J / K / 0       Scroll preview / reset
+        m               Bookmark current directory
+        M               Open bookmark list (j / k move, Enter jump, a add, d remove)
+        J / K           Scroll preview down / up
+        = / -           Zoom preview in / out
+        0               Reset preview
         Ctrl+t          Change theme (in-app picker)
 
     Sorting:

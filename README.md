@@ -36,8 +36,9 @@ crates.io and there are no prebuilt binaries — build it from source.
 - Copy, cut, paste (asks before overwriting), rename, create, delete.
 - Delete moves files to the system trash by default; trash browser (`T`) for restore.
 - Persistent copy/move queue (`Q`) for background operations.
-- Preview scroll (`J`/`K`) and reset (`0`).
-- Bookmarks (`m`/`M`) for quick directory access.
+- Preview scroll (`J`/`K`), image zoom (`=`/`-`) and reset (`0`).
+- Bookmarks (`m`/`M`): `m` marks the current directory, `M` opens the bookmark list.
+- Directories load in the background, so a big folder never freezes the interface.
 - Hidden-file toggle and sort by name/size/time/extension.
 - Tokyo Night-ish colors, Nerd Font icons; built-in themes: `tokyo-night` (default), `catppuccin-mocha`, `gruvbox-dark`, `nord`. Use `rfn --themes` to list, set `ui.theme` in config.
 
@@ -150,10 +151,11 @@ sort = ["s"]
 | `/` | Search |
 | `?` | Help |
 | `q` / `Ctrl+c` | Quit |
-| `m` / `M` | Bookmark dir / jump to bookmark |
+| `m` | Bookmark current directory |
+| `M` | Open bookmark list |
 | `J` / `K` | Preview scroll down / up |
-| `=` / `-` | Preview zoom in / out |
-| `0` | Reset preview |
+| `=` / `-` | Image zoom in / out |
+| `0` | Reset preview (scroll and zoom) |
 | `T` | Trash browser |
 | `o` | Open with command |
 | `Q` | Transfer queue (see below) |
@@ -178,6 +180,30 @@ background, and `Q` opens the queue manager:
 Tasks show `PEND`, `RUN`, `DONE` or `FAIL` and survive a restart, so a failed
 copy can be retried later.
 
+### Trash browser
+
+`T` opens the list of files that are in the system trash:
+
+| Key | Action in trash |
+|-----|-----------------|
+| `j` / `k` | Move selection |
+| `Enter` | Go to the folder the file was deleted from |
+| `r` | Restore the file |
+| `d` / `Delete` | Delete it forever (asks first) |
+| `Esc` | Close |
+
+### Bookmarks
+
+`m` marks the current directory, `M` opens the list of bookmarks:
+
+| Key | Action in bookmark list |
+|-----|-------------------------|
+| `j` / `k` | Move selection |
+| `Enter` | Jump to the bookmark |
+| `a` | Bookmark the current directory |
+| `d` | Remove the bookmark |
+| `Esc` | Close |
+
 ### Themes
 
 Four built-in themes ship with rfn: `tokyo-night` (default), `catppuccin-mocha`,
@@ -195,7 +221,8 @@ saves the choice. The active theme is shown in the status bar.
 ## Limitations
 
 - Directory conflicts during paste are replaced, not merged.
-- No image zoom or "open with" menu.
+- Renaming or creating a file never overwrites an existing one: rfn refuses
+  and tells you, instead of replacing the old file.
 - The UI is designed for terminals at least 100 columns wide; narrower
   terminals hide the parent column first.
 - Only Linux is tested.
