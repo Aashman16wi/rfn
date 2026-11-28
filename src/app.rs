@@ -1764,7 +1764,17 @@ impl App {
 
     async fn rename_selected(&mut self, new_name: &str) -> Result<()> {
         if let Some(entry) = self.selected_entry().cloned() {
+            if new_name.is_empty() || new_name.contains('/') {
+                self.notice = Some("That is not a valid name".to_string());
+                return Ok(());
+            }
             let new_path = entry.path.with_file_name(new_name);
+            // Renaming over an existing file would throw its content away,
+            // so it is refused instead.
+            if new_path != entry.path && new_path.exists() {
+                self.notice = Some(format!("\"{new_name}\" already exists"));
+                return Ok(());
+            }
             if let Err(error) = tokio::fs::rename(&entry.path, &new_path).await {
                 self.notice = Some(format!("Rename failed: {error}"));
                 return Ok(());
@@ -1776,9 +1786,22 @@ impl App {
 
     async fn create_file(&mut self, name: &str) -> Result<()> {
         let path = self.current_path.join(name);
-        if let Err(error) = tokio::fs::write(&path, "").await {
-            self.notice = Some(format!("Could not create file: {error}"));
-            return Ok(());
+        // create_new never truncates an existing file.
+        match tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .await
+        {
+            Ok(_) => {}
+            Err(error) => {
+                self.notice = Some(if error.kind() == std::io::ErrorKind::AlreadyExists {
+                    format!("\"{name}\" already exists")
+                } else {
+                    format!("Could not create file: {error}")
+                });
+                return Ok(());
+            }
         }
         self.refresh();
         Ok(())
