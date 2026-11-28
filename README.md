@@ -40,7 +40,7 @@ crates.io and there are no prebuilt binaries — build it from source.
 - Bookmarks (`m`/`M`): `m` marks the current directory, `M` opens the bookmark list.
 - Directories load in the background, so a big folder never freezes the interface.
 - Hidden-file toggle and sort by name/size/time/extension.
-- Tokyo Night-ish colors, Nerd Font icons; built-in themes: `tokyo-night` (default), `catppuccin-mocha`, `gruvbox-dark`, `nord`. Use `rfn --themes` to list, set `ui.theme` in config.
+- Nerd Font icons; eight built-in themes: `tokyo-night` (default), `catppuccin-mocha`, `catppuccin-latte`, `gruvbox-dark`, `gruvbox-light`, `nord`, `dracula`, `rose-pine`, plus `custom` for your own colors. Use `rfn --themes` to list them, `Ctrl+t` to switch inside the app.
 
 ## Requirements
 
@@ -102,7 +102,7 @@ Colors accept `#rrggbb` strings. Keys are arrays, for example:
 show_icons = true
 show_hidden = false
 show_parent = true
-theme = "tokyo-night"  # tokyo-night, catppuccin-mocha, gruvbox-dark, nord, or "custom"
+theme = "tokyo-night"  # any built-in theme, or "custom" to use [ui.colors] below
 
 [behavior]
 confirm_delete = true
@@ -206,17 +206,25 @@ copy can be retried later.
 
 ### Themes
 
-Four built-in themes ship with rfn: `tokyo-night` (default), `catppuccin-mocha`,
-`gruvbox-dark` and `nord`.
+Eight built-in themes ship with rfn: `tokyo-night` (default), `catppuccin-mocha`,
+`catppuccin-latte`, `gruvbox-dark`, `gruvbox-light`, `nord`, `dracula` and
+`rose-pine`. On top of that `custom` uses the colors from `[ui.colors]` in your
+config, so you can write your own palette.
 
 ```bash
 rfn --themes           # list themes with color previews, marks the active one
 rfn --theme nord       # switch theme and save it to the config
+rfn --theme custom     # use the colors from [ui.colors]
 rfn --theme            # same as --themes
 ```
 
 Inside the TUI, `Ctrl+t` opens a picker that applies a theme immediately and
-saves the choice. The active theme is shown in the status bar.
+saves the choice. The active theme is shown in the status bar, and the picker
+marks it with `(active)`. The picker scrolls, so every theme stays reachable
+on a short terminal.
+
+Changing the theme only touches the `theme` line of your config: comments,
+spacing and the order of the sections are left alone.
 
 ## Limitations
 
