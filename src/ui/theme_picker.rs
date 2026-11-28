@@ -20,8 +20,10 @@ pub fn render(
     let muted = crate::ui::parse_color(&colors.muted);
     let accent = crate::ui::parse_color(&colors.accent);
 
-    let width = area.width.saturating_sub(8).max(30);
-    let height = (ColorConfig::THEMES.len() as u16 + 4).min(area.height);
+    // The popup has to stay inside the terminal. A popup that reaches past
+    // the edge makes ratatui panic while it clears the area.
+    let width = area.width.saturating_sub(4).clamp(20, 60).min(area.width);
+    let height = (ColorConfig::THEMES.len() as u16 + 4).clamp(5, 20).min(area.height);
     let popup = Rect {
         x: area.x + (area.width.saturating_sub(width)) / 2,
         y: area.y + (area.height.saturating_sub(height)) / 2,

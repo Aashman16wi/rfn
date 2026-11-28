@@ -56,8 +56,10 @@ pub fn render_confirm(
     colors: &ColorConfig,
 ) {
 
-    let width = 56.min(area.width.saturating_sub(4)).max(24);
-    let height = 5;
+    // The popup has to stay inside the terminal. A popup that reaches past
+    // the edge makes ratatui panic while it clears the area.
+    let width = 56.min(area.width.saturating_sub(4)).max(24).min(area.width);
+    let height = 5.min(area.height);
     let x = area.x + area.width.saturating_sub(width) / 2;
     let y = area.y + area.height.saturating_sub(height) / 2;
     let popup = Rect::new(x, y, width, height);
